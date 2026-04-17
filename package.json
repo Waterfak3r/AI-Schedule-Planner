@@ -1,0 +1,50 @@
+{
+  "name": "ai-schedule-planner-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "author": "Wonderfak3r",
+  "description": "Youth-oriented AI schedule planner MVP (local web + Node built-ins)",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "desktop": ".\\node_modules\\electron\\dist\\electron.exe .",
+    "dist:win": "node scripts/build-win.js"
+  },
+  "devDependencies": {
+    "electron": "^34.5.8",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.ai.scheduleplanner.desktop",
+    "productName": "AI Schedule Planner",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "build/**/*",
+      "electron/**/*",
+      "public/**/*",
+      "server/**/*",
+      "data/**/*",
+      ".env.example",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

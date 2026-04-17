@@ -1,0 +1,814 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Schedule Planner</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="desktopShell" class="desktop-shell">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <div class="sidebar-brand-row">
+            <div class="brand">
+              <div class="logo">ASP</div>
+              <div class="brand-text">
+                <div class="title">AI Schedule Planner</div>
+                <div class="subtitle">Desktop workspace for chat, schedule graph, and planner settings.</div>
+              </div>
+            </div>
+            <button
+              id="btnSidebarCollapse"
+              class="icon-button sidebar-collapse-button"
+              type="button"
+              aria-label="Collapse navigation"
+              aria-expanded="true"
+            >
+              &lt;
+            </button>
+          </div>
+
+          <div class="sidebar-note">
+            Open into Chat when there is no schedule yet. Generate a plan first, then switch to Schedule for the 24h graph.
+          </div>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button id="navViewChat" class="nav-button active" type="button" data-view="chat">
+            <span class="nav-kicker">Workspace</span>
+            <span class="nav-title">Chat</span>
+            <span class="nav-subtitle">Talk to AI, break down goals, and collect schedule proposals.</span>
+          </button>
+          <button id="navViewSchedule" class="nav-button" type="button" data-view="schedule">
+            <span class="nav-kicker">Workspace</span>
+            <span class="nav-title">Schedule</span>
+            <span class="nav-subtitle">Switch between week and day 24h visual views.</span>
+          </button>
+          <button id="navViewSettings" class="nav-button" type="button" data-view="settings">
+            <span class="nav-kicker">Workspace</span>
+            <span class="nav-title">Settings</span>
+            <span class="nav-subtitle">Defaults, AI API access, and rule editors.</span>
+          </button>
+        </nav>
+      </aside>
+
+      <main class="workspace">
+        <section id="viewChat" class="workspace-view chat-view" data-view-panel="chat">
+          <div class="view-head">
+            <div>
+              <div class="view-kicker">Workspace / Chat</div>
+              <h1>AI Chat</h1>
+              <div class="view-copy">When there is no schedule yet, the home screen stays focused on the conversation. Use this view to ask for planning help first.</div>
+            </div>
+            <div class="row">
+              <button id="btnAiProposalReview" class="btn tiny hidden" type="button">Review Proposal</button>
+              <button id="btnAiProposalDiscard" class="btn tiny hidden" type="button">Discard Proposal</button>
+              <button id="btnChatClear" class="btn tiny" type="button">Clear</button>
+            </div>
+          </div>
+
+          <div id="aiProposalHint" class="modal-note hidden"></div>
+
+          <section class="card chat-surface">
+            <div id="chatMessages" class="chat-messages chat-messages-large"></div>
+
+            <div class="chat-prompts">
+              <button class="btn tiny" type="button" data-chat-prompt="Help me plan tonight in 2 hours.">Plan tonight</button>
+              <button class="btn tiny" type="button" data-chat-prompt="Give me a focused morning schedule.">Morning focus</button>
+              <button class="btn tiny" type="button" data-chat-prompt="How should I adjust if I missed one key task?">Missed task fix</button>
+            </div>
+
+            <form id="chatForm" class="chat-form">
+              <input id="chatInput" class="input" placeholder="Ask for schedule advice..." maxlength="1000" />
+              <button id="btnChatSend" class="btn primary" type="submit">Send</button>
+            </form>
+          </section>
+        </section>
+
+        <section id="viewSchedule" class="workspace-view schedule-view hidden" data-view-panel="schedule">
+          <input id="planDate" class="schedule-hidden-input" type="date" />
+
+          <div id="scheduleShell" class="schedule-shell">
+            <aside class="schedule-sidebar-panel">
+              <section id="scheduleSectionPlanner" class="card schedule-sidebar-card">
+                <div class="schedule-sidebar-card-head">
+                  <div class="schedule-sidebar-section-label">Planner</div>
+                  <button
+                    id="btnToggleScheduleSectionPlanner"
+                    class="icon-button schedule-section-toggle"
+                    type="button"
+                    aria-label="Collapse planner panel"
+                    aria-expanded="true"
+                    aria-controls="scheduleSectionPlannerBody"
+                  >
+                    -
+                  </button>
+                </div>
+                <div id="scheduleSectionPlannerBody" class="schedule-sidebar-card-body">
+                  <div class="schedule-action-stack">
+                  <button id="btnGenerate" class="btn primary" type="button">Generate Day</button>
+                  <button id="btnQuickStart" class="btn secondary" type="button">Quick Example</button>
+                  </div>
+                </div>
+              </section>
+
+              <section id="scheduleSectionCalendar" class="card schedule-sidebar-card schedule-mini-calendar-card">
+                <div class="schedule-sidebar-card-head">
+                  <div class="schedule-sidebar-section-label">Calendar</div>
+                  <button
+                    id="btnToggleScheduleSectionCalendar"
+                    class="icon-button schedule-section-toggle"
+                    type="button"
+                    aria-label="Collapse calendar panel"
+                    aria-expanded="true"
+                    aria-controls="scheduleSectionCalendarBody"
+                  >
+                    -
+                  </button>
+                </div>
+                <div id="scheduleSectionCalendarBody" class="schedule-sidebar-card-body">
+                  <div class="schedule-mini-calendar-head">
+                    <button id="btnMiniMonthPrev" class="icon-button" type="button" aria-label="Previous month">&lt;</button>
+                    <div id="miniMonthLabel" class="schedule-mini-calendar-title">April 2026</div>
+                    <button id="btnMiniMonthNext" class="icon-button" type="button" aria-label="Next month">&gt;</button>
+                  </div>
+                  <div class="mini-month-weekdays">
+                    <span>S</span>
+                    <span>M</span>
+                    <span>T</span>
+                    <span>W</span>
+                    <span>T</span>
+                    <span>F</span>
+                    <span>S</span>
+                  </div>
+                  <div id="miniMonthGrid" class="mini-month-grid"></div>
+                </div>
+              </section>
+
+              <section id="scheduleSectionOptions" class="card schedule-sidebar-card schedule-options-card">
+                <div class="schedule-sidebar-card-head">
+                  <div class="subhead">
+                    <h2>View Options</h2>
+                    <div class="schedule-shortcut-note">Ctrl + Wheel zoom</div>
+                  </div>
+                  <button
+                    id="btnToggleScheduleSectionOptions"
+                    class="icon-button schedule-section-toggle"
+                    type="button"
+                    aria-label="Collapse view options panel"
+                    aria-expanded="true"
+                    aria-controls="scheduleSectionOptionsBody"
+                  >
+                    -
+                  </button>
+                </div>
+
+                <div id="scheduleSectionOptionsBody" class="schedule-sidebar-card-body">
+                  <div class="stack compact-stack">
+                    <label class="field compact-field">
+                      <span>Wake Time</span>
+                      <input id="wakeTime" type="time" value="07:30" />
+                    </label>
+                    <label class="field compact-field">
+                      <span>Bed Time</span>
+                      <input id="bedtime" type="time" value="23:30" />
+                    </label>
+                    <label class="field compact-field">
+                      <span>Tone</span>
+                      <select id="tone">
+                        <option value="gentle">Gentle</option>
+                        <option value="snarky" selected>Snarky</option>
+                        <option value="roast">Roast</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+              </section>
+            </aside>
+
+            <div class="schedule-main-stage">
+              <div class="card schedule-topbar">
+                <div class="schedule-topbar-left">
+                  <button id="btnScheduleToday" class="btn secondary" type="button">Today</button>
+                  <div class="schedule-nav-cluster">
+                    <button id="btnSchedulePrev" class="icon-button" type="button" aria-label="Previous period">&lt;</button>
+                    <button id="btnScheduleNext" class="icon-button" type="button" aria-label="Next period">&gt;</button>
+                  </div>
+                  <div id="schedulePeriodLabel" class="schedule-period-label">April 2026</div>
+                </div>
+
+                <div class="schedule-topbar-right">
+                  <button id="btnScheduleSidebarCollapse" class="btn secondary" type="button">Hide Panels</button>
+                  <div class="segmented">
+                    <button id="btnScheduleModeWeek" class="segment-btn active" type="button" data-schedule-mode="week">Week</button>
+                    <button id="btnScheduleModeDay" class="segment-btn" type="button" data-schedule-mode="day">Day</button>
+                  </div>
+                  <button id="btnToggleDayUtilities" class="btn secondary" type="button">Show Tools</button>
+                  <button id="btnCalendarSettings" class="btn secondary" type="button">Calendar Settings</button>
+                  <div class="pill" id="scheduleZoomPreview">Zoom 100%</div>
+                  <div class="pill" id="weekZoomPreview">Zoom 100%</div>
+                </div>
+              </div>
+
+              <div id="scheduleAiBanner" class="schedule-ai-banner hidden">
+                <div id="scheduleAiBannerText" class="schedule-ai-banner-text"></div>
+                <div class="row">
+                  <button id="btnScheduleAiJumpDay" class="btn tiny" type="button">Day View</button>
+                  <button id="btnScheduleAiJumpWeek" class="btn tiny" type="button">Week View</button>
+                  <button id="btnScheduleAiClear" class="btn tiny" type="button">Dismiss</button>
+                </div>
+              </div>
+
+              <div class="schedule-body-shell">
+                <section id="scheduleDayPanel" class="schedule-mode-panel hidden">
+                  <div id="dayWorkbench" class="day-workbench">
+                    <section class="card schedule-visual-card">
+                      <div id="scheduleToolbar" class="calendar-toolbar schedule-panel-toolbar">
+                        <div class="calendar-toolbar-group">
+                          <div class="pill" id="dayRange">-</div>
+                          <div class="pill" id="progress">Done 0%</div>
+                          <div class="calendar-hint">Drag blocks to change time. Right-click for quick actions.</div>
+                        </div>
+
+                        <div class="calendar-toolbar-group">
+                          <label class="toggle-chip">
+                            <input id="toggleBuffers" type="checkbox" checked />
+                            <span>Show Buffers</span>
+                          </label>
+                          <div class="pill" id="calendarSnapPreview">Snap 15 min</div>
+                        </div>
+                      </div>
+
+                      <div class="schedule-visual-frame">
+                        <div id="scheduleIssues" class="issues hidden"></div>
+                        <div id="schedule" class="schedule">
+                          <div class="empty-state">Loading calendar...</div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <aside id="scheduleDayUtilities" class="card reminder-sidecard hidden">
+                      <div class="subhead">
+                        <h2>Reminder + Share</h2>
+                        <button id="btnCopyReminder" class="btn tiny" type="button">Copy</button>
+                      </div>
+
+                      <div class="stack">
+                        <div class="row">
+                          <button id="btnReminder" class="btn secondary" type="button">Generate Reminder</button>
+                          <button id="btnShare" class="btn secondary" type="button">Generate Share Card</button>
+                        </div>
+
+                        <div id="reminder" class="reminder">(Generate a day schedule first, then create reminder from completion stats)</div>
+                        <canvas id="shareCanvas" width="1080" height="1350" class="canvas"></canvas>
+                        <a id="downloadLink" class="btn primary hidden" download="sleep-card.png">Download PNG</a>
+                      </div>
+                    </aside>
+                  </div>
+                </section>
+
+                <section id="scheduleWeekPanel" class="schedule-mode-panel">
+                  <section class="card schedule-visual-card">
+                    <div class="calendar-toolbar schedule-panel-toolbar">
+                      <div class="calendar-toolbar-group">
+                        <div class="pill" id="weekRange">-</div>
+                        <div class="calendar-hint">Week schedule stays in sync automatically with your current rules and edits.</div>
+                      </div>
+                    </div>
+                    <div class="schedule-visual-frame">
+                      <div id="weekPlan" class="empty-state">Loading week view...</div>
+                    </div>
+                  </section>
+                </section>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="viewSettings" class="workspace-view settings-view hidden" data-view-panel="settings">
+          <div class="view-head">
+            <div>
+              <div class="view-kicker">Workspace / Settings</div>
+              <h1>Settings</h1>
+              <div class="view-copy">Switch between compact setting categories instead of scrolling through one large page.</div>
+            </div>
+          </div>
+
+          <div class="settings-shell">
+            <aside class="settings-rail">
+              <button class="settings-nav-button active" type="button" data-settings-section="app">
+                <span class="nav-title">App</span>
+                <span class="nav-subtitle">Startup and default windows</span>
+              </button>
+              <button class="settings-nav-button" type="button" data-settings-section="ai">
+                <span class="nav-title">AI</span>
+                <span class="nav-subtitle">API connection and desktop config</span>
+              </button>
+              <button class="settings-nav-button" type="button" data-settings-section="rules">
+                <span class="nav-title">Rules</span>
+                <span class="nav-subtitle">Timed items and recurring tasks</span>
+              </button>
+              <button class="settings-nav-button" type="button" data-settings-section="community">
+                <span class="nav-title">Community</span>
+                <span class="nav-subtitle">Local lab posts and reminders</span>
+              </button>
+            </aside>
+
+            <div class="settings-stage">
+              <section class="card settings-panel" data-settings-panel="app">
+                <div class="subhead">
+                  <h2>App Defaults</h2>
+                  <button id="btnSaveWorkspacePrefs" class="btn tiny" type="button">Save Defaults</button>
+                </div>
+
+                <div class="settings-panel-body">
+                  <div class="settings-inline-grid">
+                    <label class="field">
+                      <span>Default Window</span>
+                      <select id="defaultStartupView" class="input select full">
+                        <option value="chat">Chat</option>
+                        <option value="schedule">Schedule</option>
+                        <option value="settings">Settings</option>
+                      </select>
+                    </label>
+
+                    <label class="field">
+                      <span>Default Schedule Page</span>
+                      <select id="defaultScheduleMode" class="input select full">
+                        <option value="week">Week</option>
+                        <option value="day">Day</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div id="workspacePrefsStatus" class="modal-note hidden"></div>
+                </div>
+              </section>
+
+              <section class="card settings-panel hidden" data-settings-panel="ai">
+                <div class="subhead">
+                  <h2>AI API</h2>
+                  <div class="row">
+                    <button id="btnDesktopOpenConfig" class="btn tiny" type="button">Open Config</button>
+                    <button id="btnDesktopOpenData" class="btn tiny" type="button">Open Data Folder</button>
+                  </div>
+                </div>
+
+                <div class="settings-panel-body">
+                  <form id="aiConfigForm" class="stack">
+                    <label class="field">
+                      <span>Base URL</span>
+                      <input id="relayBaseUrl" class="input" placeholder="https://api.openai.com/v1" />
+                    </label>
+
+                    <div class="settings-inline-grid">
+                      <label class="field">
+                        <span>Model</span>
+                        <input id="relayModel" class="input" placeholder="gpt-4.1-mini" />
+                      </label>
+                      <label class="field">
+                        <span>Chat Path</span>
+                        <input id="relayChatPath" class="input" placeholder="/chat/completions" />
+                      </label>
+                    </div>
+
+                    <label class="field">
+                      <span>API Key</span>
+                      <input id="relayApiKey" class="input" type="password" placeholder="sk-..." />
+                    </label>
+
+                    <div class="settings-inline-grid">
+                      <label class="field">
+                        <span>Key Header</span>
+                        <input id="relayApiKeyHeader" class="input" placeholder="Authorization" />
+                      </label>
+                      <label class="field">
+                        <span>Key Prefix</span>
+                        <input id="relayApiKeyPrefix" class="input" placeholder="Bearer " />
+                      </label>
+                    </div>
+
+                    <div class="row">
+                      <button id="btnSaveAiConfig" class="btn primary" type="submit">Save AI Config</button>
+                    </div>
+
+                    <div id="aiConfigStatus" class="modal-note hidden"></div>
+                  </form>
+
+                  <div id="storageNote" class="hint">
+                    Desktop mode stores Chromium data and backend files in the app profile.
+                  </div>
+                  <div id="desktopBanner" class="desktop-banner hidden">
+                    <div id="desktopRuntimeText" class="desktop-runtime-text">Desktop mode is active.</div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-panel hidden" data-settings-panel="rules">
+                <div class="rules-shell">
+                  <div class="rules-shell-head">
+                    <div class="subhead">
+                      <h2>Rule Editor</h2>
+                      <div class="segmented">
+                        <button class="segment-btn active" type="button" data-rules-mode="fixed">Timed Items</button>
+                        <button class="segment-btn" type="button" data-rules-mode="task">Recurring Tasks</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div id="rulesFixedPanel" class="rules-panel">
+                    <section class="card rule-list-card">
+                      <div class="subhead">
+                        <h2>Timed Items</h2>
+                        <button id="btnNewFixed" class="btn tiny" type="button">New</button>
+                      </div>
+                      <div id="fixedList" class="rule-list"></div>
+                    </section>
+
+                    <section class="card rule-form-card">
+                      <div class="subhead">
+                        <h2 id="fixedEditorTitle">New Timed Item</h2>
+                        <button id="btnDeleteFixed" class="btn tiny danger hidden" type="button">Delete</button>
+                      </div>
+
+                      <form id="fixedForm" class="stack">
+                        <label class="field">
+                          <span>Title</span>
+                          <input id="fixedTitle" class="input" placeholder="e.g. class / commute / meeting" />
+                        </label>
+
+                        <div class="settings-inline-grid">
+                          <label class="field">
+                            <span>Start</span>
+                            <input id="fixedStart" class="input time full" type="time" value="09:00" />
+                          </label>
+                          <label class="field">
+                            <span>End</span>
+                            <input id="fixedEnd" class="input time full" type="time" value="10:30" />
+                          </label>
+                        </div>
+
+                        <label class="field">
+                          <span>Buffer Minutes</span>
+                          <input id="fixedBuffer" class="input small full" type="number" min="0" max="180" value="0" placeholder="buffer min" />
+                        </label>
+
+                        <div id="fixedRepeatReadonly" class="modal-note hidden"></div>
+
+                        <div class="repeat-box">
+                          <div class="repeat-label">Repeat Weekdays (none = every day)</div>
+                          <div class="weekday-row">
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="1" /><span>Mon</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="2" /><span>Tue</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="3" /><span>Wed</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="4" /><span>Thu</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="5" /><span>Fri</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="6" /><span>Sat</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="0" /><span>Sun</span></label>
+                          </div>
+                        </div>
+
+                        <div class="row">
+                          <button id="btnSubmitFixed" class="btn primary" type="submit">Create Timed Item</button>
+                        </div>
+                        <div id="fixedEditorStatus" class="modal-note hidden"></div>
+                      </form>
+                    </section>
+                  </div>
+
+                  <div id="rulesTaskPanel" class="rules-panel hidden">
+                    <section class="card rule-list-card">
+                      <div class="subhead">
+                        <h2>Recurring Tasks</h2>
+                        <button id="btnNewTask" class="btn tiny" type="button">New</button>
+                      </div>
+                      <div id="taskList" class="rule-list"></div>
+                    </section>
+
+                    <section class="card rule-form-card">
+                      <div class="subhead">
+                        <h2 id="taskEditorTitle">New Task Rule</h2>
+                        <button id="btnDeleteTask" class="btn tiny danger hidden" type="button">Delete</button>
+                      </div>
+
+                      <form id="taskForm" class="stack">
+                        <label class="field">
+                          <span>Title</span>
+                          <input id="taskTitle" class="input" placeholder="e.g. vocabulary / coding / workout" />
+                        </label>
+
+                        <div class="settings-inline-grid">
+                          <label class="field">
+                            <span>Category</span>
+                            <select id="taskCategory" class="input select full">
+                              <option value="study">Study</option>
+                              <option value="code">Code</option>
+                              <option value="workout">Workout</option>
+                              <option value="other" selected>Other</option>
+                            </select>
+                          </label>
+                          <label class="field">
+                            <span>Duration</span>
+                            <input id="taskDuration" class="input small full" type="number" min="5" max="480" value="30" />
+                          </label>
+                        </div>
+
+                        <div class="settings-inline-grid">
+                          <label class="field">
+                            <span>Energy</span>
+                            <select id="taskEnergy" class="input select full">
+                              <option value="high">High</option>
+                              <option value="medium" selected>Medium</option>
+                              <option value="low">Low</option>
+                            </select>
+                          </label>
+                          <label class="field">
+                            <span>Priority</span>
+                            <select id="taskPriority" class="input select full">
+                              <option value="5">Priority 5</option>
+                              <option value="4">Priority 4</option>
+                              <option value="3" selected>Priority 3</option>
+                              <option value="2">Priority 2</option>
+                              <option value="1">Priority 1</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div class="settings-inline-grid">
+                          <label class="field">
+                            <span>Weekly Target</span>
+                            <input id="taskWeeklyTarget" class="input small full" type="number" min="0" max="7" value="0" placeholder="weekly count" title="0 = fixed weekdays; >0 = auto assign per week" />
+                          </label>
+                          <label class="checkbox settings-checkbox-card">
+                            <input id="taskSplit" type="checkbox" />
+                            <span>Allow split</span>
+                          </label>
+                        </div>
+
+                        <div class="repeat-box">
+                          <div class="repeat-label">Weekday Settings (fixed repeat / weekly candidates)</div>
+                          <div class="weekday-row">
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="1" /><span>Mon</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="2" /><span>Tue</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="3" /><span>Wed</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="4" /><span>Thu</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="5" /><span>Fri</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="6" /><span>Sat</span></label>
+                            <label class="weekday-chip"><input type="checkbox" data-weekday-task value="0" /><span>Sun</span></label>
+                          </div>
+                        </div>
+
+                        <div class="row">
+                          <button id="btnSubmitTask" class="btn primary" type="submit">Create Task Rule</button>
+                        </div>
+                        <div id="taskEditorStatus" class="modal-note hidden"></div>
+                      </form>
+                    </section>
+                  </div>
+                </div>
+              </section>
+
+              <section class="card settings-panel hidden" data-settings-panel="community">
+                <div class="subhead">
+                  <h2>Community (Lab)</h2>
+                  <div class="row">
+                    <button id="btnRefreshCommunity" class="btn secondary" type="button">Refresh</button>
+                    <button id="btnPostReminder" class="btn primary" type="button">Post Current Reminder</button>
+                  </div>
+                </div>
+                <div class="settings-panel-body">
+                  <div id="communityList" class="list"></div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="contextMenu" class="context-menu hidden"></div>
+
+    <div id="eventModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="eventModalTitle">
+      <div class="modal-card">
+        <div class="subhead">
+          <h3 id="eventModalTitle">Quick Edit</h3>
+          <button id="btnCloseEventModal" class="btn tiny" type="button">Close</button>
+        </div>
+        <div id="eventModalHint" class="modal-note"></div>
+        <form id="eventForm" class="stack">
+          <input id="eventBlockId" type="hidden" />
+          <input id="eventMode" type="hidden" />
+          <input id="eventBlockType" type="hidden" />
+
+          <div class="modal-grid">
+            <label class="field">
+              <span>Title</span>
+              <input id="eventTitle" class="input" />
+            </label>
+            <label class="field">
+              <span>Start</span>
+              <input id="eventStart" class="input time" type="time" />
+            </label>
+            <label class="field">
+              <span>End</span>
+              <input id="eventEnd" class="input time" type="time" />
+            </label>
+
+            <label id="eventCategoryField" class="field">
+              <span>Category</span>
+              <select id="eventCategory" class="input select">
+                <option value="study">Study</option>
+                <option value="code">Code</option>
+                <option value="workout">Workout</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+
+            <label id="eventEnergyField" class="field">
+              <span>Energy</span>
+              <select id="eventEnergy" class="input select">
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </label>
+
+            <label id="eventPriorityField" class="field">
+              <span>Priority</span>
+              <select id="eventPriority" class="input select">
+                <option value="5">5</option>
+                <option value="4">4</option>
+                <option value="3">3</option>
+                <option value="2">2</option>
+                <option value="1">1</option>
+              </select>
+            </label>
+
+            <label id="eventBufferField" class="field hidden">
+              <span>Buffer Minutes</span>
+              <input id="eventBuffer" class="input small" type="number" min="0" max="180" value="0" />
+            </label>
+          </div>
+
+          <div id="eventRecurrenceSection" class="repeat-box hidden">
+            <label class="checkbox">
+              <input id="eventRecurringEnabled" type="checkbox" />
+              <span>Create as repeating timed item</span>
+            </label>
+
+            <div class="repeat-label">Repeat weekdays</div>
+            <div class="weekday-row">
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="1" /><span>Mon</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="2" /><span>Tue</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="3" /><span>Wed</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="4" /><span>Thu</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="5" /><span>Fri</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="6" /><span>Sat</span></label>
+              <label class="weekday-chip"><input type="checkbox" data-weekday-event value="0" /><span>Sun</span></label>
+            </div>
+
+            <div class="modal-grid">
+              <label class="field">
+                <span>Repeat Mode</span>
+                <select id="eventRecurrenceMode" class="input select">
+                  <option value="forever">Forever</option>
+                  <option value="count">Repeat N Times</option>
+                  <option value="until">Repeat Until Date</option>
+                </select>
+              </label>
+
+              <label id="eventRecurrenceCountField" class="field hidden">
+                <span>Occurrences</span>
+                <input id="eventRecurrenceCount" class="input small full" type="number" min="1" max="365" value="8" />
+              </label>
+
+              <label id="eventRecurrenceUntilField" class="field hidden">
+                <span>Until</span>
+                <input id="eventRecurrenceUntil" class="input" type="date" />
+              </label>
+            </div>
+
+            <div class="modal-note">
+              When enabled, this item writes into timed-item rules and keeps week/day views in sync automatically.
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button id="btnDeleteEvent" class="btn danger hidden" type="button">Remove from Day</button>
+            <button id="btnCancelEvent" class="btn secondary" type="button">Cancel</button>
+            <button id="btnSaveEvent" class="btn primary" type="submit">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="calendarSettingsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="calendarSettingsTitle">
+      <div class="modal-card modal-card-sm">
+        <div class="subhead">
+          <h3 id="calendarSettingsTitle">Calendar Settings</h3>
+          <button id="btnCloseCalendarSettings" class="btn tiny" type="button">Close</button>
+        </div>
+
+        <form id="calendarSettingsForm" class="stack">
+          <label class="checkbox">
+            <input id="calendarShowBuffers" type="checkbox" />
+            <span>Show buffer blocks for timed items</span>
+          </label>
+
+          <label class="field">
+            <span>Drag Snap</span>
+            <select id="calendarSnapMinutes" class="input select">
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
+              <option value="15">15 minutes</option>
+              <option value="30">30 minutes</option>
+            </select>
+          </label>
+
+          <div class="modal-note">
+            Drag/edit/create for task blocks only affects the currently loaded day. Editing timed items writes back to rules and regenerates day/week.
+          </div>
+
+          <div class="modal-actions">
+            <button id="btnCancelCalendarSettings" class="btn secondary" type="button">Cancel</button>
+            <button id="btnSaveCalendarSettings" class="btn primary" type="submit">Save Settings</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="aiApplyModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="aiApplyTitle">
+      <div class="modal-card modal-card-sm">
+        <div class="subhead">
+          <h3 id="aiApplyTitle">Apply AI Changes?</h3>
+          <button id="btnCloseAiApply" class="btn tiny" type="button">Close</button>
+        </div>
+        <div id="aiApplySummary" class="modal-note"></div>
+        <div class="modal-actions">
+          <button id="btnCancelAiApply" class="btn secondary" type="button">Cancel</button>
+          <button id="btnConfirmAiApply" class="btn primary" type="button">Apply</button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      id="conflictResolutionModal"
+      class="modal-overlay hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="conflictResolutionTitle"
+    >
+      <div class="modal-card modal-card-sm">
+        <div class="subhead">
+          <h3 id="conflictResolutionTitle">时间冲突</h3>
+          <button id="btnCloseConflictResolution" class="btn tiny" type="button">X</button>
+        </div>
+        <div id="conflictResolutionSummary" class="modal-note"></div>
+        <div id="conflictResolutionDetails" class="modal-detail-list"></div>
+        <div class="modal-actions">
+          <button id="btnEditConflictResolution" class="btn secondary" type="button">继续修改</button>
+          <button id="btnConfirmConflictResolution" class="btn primary" type="button">仍然保存</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="taskScopeModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="taskScopeTitle">
+      <div class="modal-card modal-card-sm">
+        <div class="subhead">
+          <h3 id="taskScopeTitle">Apply Changes</h3>
+          <button id="btnCloseTaskScope" class="btn tiny" type="button">X</button>
+        </div>
+        <div id="taskScopeSummary" class="modal-note"></div>
+        <div class="modal-actions modal-actions-triple">
+          <button id="btnTaskScopeSingle" class="btn secondary" type="button">Only This Day</button>
+          <button id="btnTaskScopeFollowing" class="btn secondary" type="button">This Date And Later</button>
+          <button id="btnTaskScopeAll" class="btn primary" type="button">All Repeating Items</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="scheduleUndoToast" class="schedule-undo-toast hidden" role="status" aria-live="polite">
+      <div class="schedule-undo-card">
+        <div class="schedule-undo-head">
+          <div class="schedule-undo-title">已更新日程</div>
+          <button id="btnCloseScheduleUndo" class="schedule-undo-close" type="button" aria-label="Close undo notice">X</button>
+        </div>
+        <div id="scheduleUndoSummary" class="schedule-undo-summary">本操作更改了 1 个日程</div>
+        <div id="scheduleUndoLabel" class="schedule-undo-label hidden"></div>
+        <div class="schedule-undo-actions">
+          <button id="btnScheduleUndo" class="schedule-undo-btn" type="button" title="Undo">↶</button>
+          <button id="btnScheduleUndoApply" class="schedule-undo-btn keep" type="button" title="Keep">✓</button>
+        </div>
+        <div class="schedule-undo-progress">
+          <div id="scheduleUndoProgressBar" class="schedule-undo-progress-bar"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+
+
+
