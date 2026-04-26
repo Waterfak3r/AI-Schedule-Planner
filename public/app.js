@@ -22,6 +22,7 @@ const DEFAULT_WORKSPACE_PREFS = {
   defaultStartupView: "chat",
   defaultScheduleMode: "week",
   navCollapsed: false,
+  theme: "light",
 };
 const DEFAULT_PLANNER_PREFS = {
   planDate: "",
@@ -57,8 +58,8 @@ const SCHEDULE_SIDEBAR_SECTIONS = [
     buttonId: "btnToggleScheduleSectionPlanner",
     collapsedText: "+",
     expandedText: "-",
-    collapsedTitle: "Expand planner panel",
-    expandedTitle: "Collapse planner panel",
+    collapsedTitle: "展开规划",
+    expandedTitle: "收起规划",
   },
   {
     key: "calendarPanelCollapsed",
@@ -67,8 +68,8 @@ const SCHEDULE_SIDEBAR_SECTIONS = [
     buttonId: "btnToggleScheduleSectionCalendar",
     collapsedText: "+",
     expandedText: "-",
-    collapsedTitle: "Expand calendar panel",
-    expandedTitle: "Collapse calendar panel",
+    collapsedTitle: "展开日历",
+    expandedTitle: "收起日历",
   },
   {
     key: "optionsPanelCollapsed",
@@ -77,8 +78,8 @@ const SCHEDULE_SIDEBAR_SECTIONS = [
     buttonId: "btnToggleScheduleSectionOptions",
     collapsedText: "+",
     expandedText: "-",
-    collapsedTitle: "Expand view options panel",
-    expandedTitle: "Collapse view options panel",
+    collapsedTitle: "展开选项",
+    expandedTitle: "收起选项",
   },
 ];
 let scheduleHydrationPromise = null;
@@ -164,6 +165,8 @@ const state = {
     editor: null,
     chatSending: false,
     pendingAiProposal: null,
+    pendingAiPreview: null,
+    aiApplyPreviewRequestId: 0,
     desktopInfo: null,
     activeView: "chat",
     scheduleMode: "week",
@@ -199,15 +202,39 @@ function normalizeWorkspacePrefs(value) {
     ? raw.defaultScheduleMode
     : DEFAULT_WORKSPACE_PREFS.defaultScheduleMode;
   const navCollapsed = Boolean(raw.navCollapsed);
+  const theme = raw.theme === "dark" ? "dark" : DEFAULT_WORKSPACE_PREFS.theme;
   return {
     defaultStartupView,
     defaultScheduleMode,
     navCollapsed,
+    theme,
   };
 }
 
 function persistWorkspacePrefs() {
   storage.save("asp.workspacePrefs", state.workspacePrefs);
+}
+
+function applyWorkspaceTheme() {
+  const theme = state.workspacePrefs.theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  const themeButton = $("btnThemeToggle");
+  if (themeButton) {
+    themeButton.textContent = theme === "dark" ? "☾" : "◐";
+    themeButton.title = theme === "dark" ? "切换浅色模式" : "切换深色模式";
+    themeButton.setAttribute("aria-label", themeButton.title);
+    themeButton.classList.toggle("active", theme === "dark");
+  }
+  const darkModeInput = $("darkModeEnabled");
+  if (darkModeInput instanceof HTMLInputElement) {
+    darkModeInput.checked = theme === "dark";
+  }
+}
+
+function setWorkspaceTheme(nextTheme) {
+  state.workspacePrefs.theme = nextTheme === "dark" ? "dark" : "light";
+  persistWorkspacePrefs();
+  applyWorkspaceTheme();
 }
 
 function normalizeScheduleViewPrefs(value) {
@@ -238,15 +265,15 @@ function renderShellChrome() {
   const navButton = $("btnSidebarCollapse");
   if (navButton) {
     navButton.textContent = navCollapsed ? ">" : "<";
-    navButton.title = navCollapsed ? "Expand navigation" : "Collapse navigation";
+    navButton.title = navCollapsed ? "展开导航" : "收起导航";
     navButton.setAttribute("aria-label", navButton.title);
     navButton.setAttribute("aria-expanded", String(!navCollapsed));
   }
 
   const scheduleButton = $("btnScheduleSidebarCollapse");
   if (scheduleButton) {
-    scheduleButton.textContent = scheduleSidebarCollapsed ? "Show Panels" : "Hide Panels";
-    scheduleButton.title = scheduleSidebarCollapsed ? "Show planner panels" : "Hide planner panels";
+    scheduleButton.textContent = scheduleSidebarCollapsed ? "显示面板" : "隐藏面板";
+    scheduleButton.title = scheduleSidebarCollapsed ? "显示规划面板" : "隐藏规划面板";
     scheduleButton.setAttribute("aria-expanded", String(!scheduleSidebarCollapsed));
     scheduleButton.classList.toggle("active", scheduleSidebarCollapsed);
   }
@@ -481,8 +508,7 @@ function ensureChatSeed() {
     {
       id: uid("chatmsg"),
       role: "assistant",
-      content:
-        "我是你的日程助理。你可以让我帮你拆解任务、调整日程、处理冲突，或根据今天完成情况给出下一步建议。",
+      content: "说一下你今天要做什么，我来排时间。",
     },
   ];
   persistChatHistory();
@@ -576,20 +602,13 @@ function addMonthsIso(isoDate, months) {
 
 function formatMonthYearLabel(isoDate) {
   const date = parseIsoDate(isoDate) || parseIsoDate(todayInputValue());
-  return date.toLocaleDateString("en-US", {
-    month: "long",
-    year: "numeric",
-  });
+  return `${date.getFullYear()}年${date.getMonth() + 1}月`;
 }
 
 function formatDayPeriodLabel(isoDate) {
   const date = parseIsoDate(isoDate) || parseIsoDate(todayInputValue());
-  return date.toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  });
+  const weekdays = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${weekdays[date.getDay()]}`;
 }
 
 function formatWeekPeriodLabel(isoDate) {
@@ -598,18 +617,9 @@ function formatWeekPeriodLabel(isoDate) {
   const end = parseIsoDate(addDaysIso(startIso, 6));
   if (!start || !end) return formatMonthYearLabel(isoDate);
 
-  const sameMonth = start.getMonth() === end.getMonth();
-  const sameYear = start.getFullYear() === end.getFullYear();
-  const startLabel = start.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-  const endLabel = end.toLocaleDateString("en-US", {
-    month: sameMonth ? undefined : "short",
-    day: "numeric",
-    year: sameYear ? undefined : "numeric",
-  });
-  return `${startLabel} - ${endLabel}, ${end.getFullYear()}`;
+  const startLabel = `${start.getFullYear()}.${String(start.getMonth() + 1).padStart(2, "0")}.${String(start.getDate()).padStart(2, "0")}`;
+  const endLabel = `${end.getFullYear()}.${String(end.getMonth() + 1).padStart(2, "0")}.${String(end.getDate()).padStart(2, "0")}`;
+  return `${startLabel} - ${endLabel}`;
 }
 
 function formatScheduleDateLabel(isoDate) {
@@ -1007,7 +1017,7 @@ function toneLabel(tone) {
 function fmtFixed(event) {
   const bufferMin = clampInt(event?.bufferMin ?? 0, 0, 0, 180);
   const bufferText = bufferMin > 0 ? ` / 缓冲 ${bufferMin} 分钟` : "";
-  return `${event.start}-${event.end} 路 ${fixedCadenceSummary(event)}${bufferText}`;
+  return `${event.start}-${event.end} / ${fixedCadenceSummary(event)}${bufferText}`;
 }
 
 function fmtTask(task) {
@@ -1022,7 +1032,7 @@ function getBlockDisplayTitle(block) {
 }
 
 function resetReminderCard() {
-  $("reminder").textContent = "（先生成当日日程，再根据完成情况生成提醒）";
+  $("reminder").textContent = "先生成日程";
   $("downloadLink").classList.add("hidden");
   $("shareCanvas").style.display = "none";
 }
@@ -1184,15 +1194,15 @@ function renderLists() {
         </div>
       </button>
       <div class="rule-list-actions">
-        <button class="btn tiny" type="button" data-select-fixed="${escapeHtml(event.id)}">Edit</button>
-        <button class="btn tiny" type="button" data-del-fixed="${escapeHtml(event.id)}">Delete</button>
+        <button class="btn tiny" type="button" data-select-fixed="${escapeHtml(event.id)}">编辑</button>
+        <button class="btn tiny" type="button" data-del-fixed="${escapeHtml(event.id)}">删除</button>
       </div>
     `;
     fixedList.appendChild(el);
   }
 
   if (state.fixedEvents.length === 0) {
-    fixedList.innerHTML = '<div class="empty-state compact-empty">No timed items yet.</div>';
+    fixedList.innerHTML = '<div class="empty-state compact-empty">暂无固定事项</div>';
   }
 
   const taskList = $("taskList");
@@ -1207,19 +1217,19 @@ function renderLists() {
       <button class="rule-list-main" type="button" data-select-task="${escapeHtml(task.id)}">
         <div class="meta">
           <div class="name">${escapeHtml(task.title)}</div>
-          <div class="sub">${escapeHtml(fmtTask(task))} 路 ${escapeHtml(energyLabel(task.energy))}${escapeHtml(splitText)}</div>
+          <div class="sub">${escapeHtml(fmtTask(task))} / ${escapeHtml(energyLabel(task.energy))}${escapeHtml(splitText)}</div>
         </div>
       </button>
       <div class="rule-list-actions">
-        <button class="btn tiny" type="button" data-select-task="${escapeHtml(task.id)}">Edit</button>
-        <button class="btn tiny" type="button" data-del-task="${escapeHtml(task.id)}">Delete</button>
+        <button class="btn tiny" type="button" data-select-task="${escapeHtml(task.id)}">编辑</button>
+        <button class="btn tiny" type="button" data-del-task="${escapeHtml(task.id)}">删除</button>
       </div>
     `;
     taskList.appendChild(el);
   }
 
   if (state.tasks.length === 0) {
-    taskList.innerHTML = '<div class="empty-state compact-empty">No task rules yet.</div>';
+    taskList.innerHTML = '<div class="empty-state compact-empty">暂无任务规则</div>';
   }
 
   renderRuleEditors();
@@ -1227,9 +1237,9 @@ function renderLists() {
 
 function syncCalendarToolbar() {
   $("toggleBuffers").checked = state.calendarSettings.showBuffers;
-  $("calendarSnapPreview").textContent = `Snap ${state.calendarSettings.snapMinutes} min`;
-  $("scheduleZoomPreview").textContent = `Zoom ${Math.round(state.scheduleViewPrefs.dayZoom * 100)}%`;
-  $("weekZoomPreview").textContent = `Zoom ${Math.round(state.scheduleViewPrefs.weekZoom * 100)}%`;
+  $("calendarSnapPreview").textContent = `${state.calendarSettings.snapMinutes} 分钟`;
+  $("scheduleZoomPreview").textContent = `${Math.round(state.scheduleViewPrefs.dayZoom * 100)}%`;
+  $("weekZoomPreview").textContent = `${Math.round(state.scheduleViewPrefs.weekZoom * 100)}%`;
 }
 
 function getSelectedPlanDate() {
@@ -1809,18 +1819,18 @@ function buildEventMeta(block) {
     const items = [categoryLabel(block.category), energyLabel(block.energy), `优先级 ${block.priority}`];
     if (block.partial) items.push("部分安排");
     if (block.manual) items.push("本地调整");
-    return items.join(" 路 ");
+    return items.join(" / ");
   }
 
   if (block.type === "fixed") {
     const items = ["定时事项"];
     if (block.bufferMin > 0) items.push(`缓冲 ${block.bufferMin} 分钟`);
-    return items.join(" 路 ");
+    return items.join(" / ");
   }
 
   const items = ["缓冲区"];
   if (block.bufferMin > 0) items.push(`${block.bufferMin} 分钟`);
-  return items.join(" 路 ");
+  return items.join(" / ");
 }
 
 function eventClassName(block) {
@@ -1967,7 +1977,7 @@ function renderSchedule(schedule, options = {}) {
           .map(
             (item) => `
               <div class="unscheduled-item">
-                <strong>${escapeHtml(item.title)}</strong> 路 ${escapeHtml(String(item.durationMin))} 分钟<br />
+                <strong>${escapeHtml(item.title)}</strong> / ${escapeHtml(String(item.durationMin))} 分钟<br />
                 ${escapeHtml(item.reason)}
               </div>
             `
@@ -1981,7 +1991,7 @@ function renderSchedule(schedule, options = {}) {
   const allIssues = [...(displaySchedule.issues || []), ...computeLocalScheduleIssues(displaySchedule)];
   renderScheduleIssues(allIssues);
   $("dayRange").textContent = displaySchedule.dateLabel
-    ? `${displaySchedule.dateLabel} 路 ${displaySchedule.dayStart}-${displaySchedule.dayEnd}`
+    ? `${displaySchedule.dateLabel} / ${displaySchedule.dayStart}-${displaySchedule.dayEnd}`
     : `${displaySchedule.dayStart}-${displaySchedule.dayEnd}`;
   updateProgressPill();
 
@@ -2054,6 +2064,7 @@ function buildChatContext() {
     planDate: $("planDate").value || todayInputValue(),
     wakeTime: $("wakeTime").value || "07:30",
     bedtime: $("bedtime").value || "23:30",
+    tone: $("tone")?.value || DEFAULT_PLANNER_PREFS.tone,
     hasSchedule: Boolean(schedule),
     scheduleSummary: schedule
       ? `blocks=${schedule.blocks.length}, unscheduled=${schedule.unscheduled.length}, done=${stats.percent}%`
@@ -2082,6 +2093,7 @@ function setInlineStatus(id, message, { isError = false } = {}) {
 function renderWorkspacePrefsForm() {
   $("defaultStartupView").value = state.workspacePrefs.defaultStartupView;
   $("defaultScheduleMode").value = state.workspacePrefs.defaultScheduleMode;
+  applyWorkspaceTheme();
 }
 
 function setSelectedWeekdays(attributeName, daysOfWeek) {
@@ -2141,7 +2153,7 @@ function renderRuleEditors() {
   const fixed = getSelectedFixedRule();
   if (fixed) {
     const assignedDates = normalizeAssignedDates(fixed.assignedDates);
-    $("fixedEditorTitle").textContent = "Edit Timed Item";
+    $("fixedEditorTitle").textContent = "编辑固定事项";
     $("fixedTitle").value = fixed.title || "";
     $("fixedStart").value = fixed.start || "09:00";
     $("fixedEnd").value = fixed.end || "10:30";
@@ -2153,17 +2165,17 @@ function renderRuleEditors() {
       ? `这个定时事项按指定日期重复：${assignedDateSummary(assignedDates)}`
       : "";
     $("btnDeleteFixed").classList.remove("hidden");
-    $("btnSubmitFixed").textContent = "Save Timed Item";
+    $("btnSubmitFixed").textContent = "保存";
   } else {
-    $("fixedEditorTitle").textContent = "New Timed Item";
+    $("fixedEditorTitle").textContent = "新固定事项";
     $("btnDeleteFixed").classList.add("hidden");
-    $("btnSubmitFixed").textContent = "Create Timed Item";
+    $("btnSubmitFixed").textContent = "保存";
     resetFixedEditor();
   }
 
   const task = getSelectedTaskRule();
   if (task) {
-    $("taskEditorTitle").textContent = "Edit Task Rule";
+    $("taskEditorTitle").textContent = "编辑任务规则";
     $("taskTitle").value = task.title || "";
     $("taskCategory").value = task.category || "other";
     $("taskDuration").value = String(task.durationMin || 30);
@@ -2173,11 +2185,11 @@ function renderRuleEditors() {
     $("taskSplit").checked = Boolean(task.splitAllowed);
     setSelectedWeekdays("data-weekday-task", task.daysOfWeek);
     $("btnDeleteTask").classList.remove("hidden");
-    $("btnSubmitTask").textContent = "Save Task Rule";
+    $("btnSubmitTask").textContent = "保存";
   } else {
-    $("taskEditorTitle").textContent = "New Task Rule";
+    $("taskEditorTitle").textContent = "新任务规则";
     $("btnDeleteTask").classList.add("hidden");
-    $("btnSubmitTask").textContent = "Create Task Rule";
+    $("btnSubmitTask").textContent = "保存";
     resetTaskEditor();
   }
 }
@@ -2224,7 +2236,7 @@ function renderDayUtilityPanel() {
   $("scheduleDayUtilities")?.classList.toggle("hidden", !isOpen);
   $("btnToggleDayUtilities")?.classList.toggle("active", isOpen);
   if ($("btnToggleDayUtilities")) {
-    $("btnToggleDayUtilities").textContent = isOpen ? "Hide Tools" : "Show Tools";
+    $("btnToggleDayUtilities").textContent = isOpen ? "隐藏工具" : "工具";
   }
 }
 
@@ -2279,11 +2291,11 @@ function setRulesMode(nextMode) {
 function buildAiFocusSummary(focus) {
   if (!focus?.date) return "";
   const parts = [];
-  if (focus.addedCount > 0) parts.push(`added ${focus.addedCount}`);
-  if (focus.movedCount > 0) parts.push(`moved ${focus.movedCount}`);
-  if (focus.removedCount > 0) parts.push(`removed ${focus.removedCount}`);
-  const changeText = parts.length > 0 ? parts.join(", ") : "updated schedule";
-  return `AI changes applied for ${focus.date}: ${changeText}. Highlighted blocks remain marked until you dismiss this banner.`;
+  if (focus.addedCount > 0) parts.push(`新增 ${focus.addedCount}`);
+  if (focus.movedCount > 0) parts.push(`移动 ${focus.movedCount}`);
+  if (focus.removedCount > 0) parts.push(`删除 ${focus.removedCount}`);
+  const changeText = parts.length > 0 ? parts.join(" / ") : "已更新";
+  return `${focus.date}：${changeText}`;
 }
 
 function renderAiFocusBanner() {
@@ -2317,7 +2329,7 @@ function setAiFocus(focus) {
 
 async function loadAiConfigIntoForm() {
   if (!window.desktopApp || typeof window.desktopApp.getAiConfig !== "function") {
-    setInlineStatus("aiConfigStatus", "AI config editing is available in the desktop build only.");
+    setInlineStatus("aiConfigStatus", "仅桌面版可编辑配置。");
     return;
   }
 
@@ -2329,9 +2341,9 @@ async function loadAiConfigIntoForm() {
     $("relayChatPath").value = config?.RELAY_CHAT_PATH || "";
     $("relayApiKeyHeader").value = config?.RELAY_API_KEY_HEADER || "";
     $("relayApiKeyPrefix").value = config?.RELAY_API_KEY_PREFIX || "";
-    setInlineStatus("aiConfigStatus", "Desktop config loaded from the app profile.");
+    setInlineStatus("aiConfigStatus", "配置已载入。");
   } catch (error) {
-    setInlineStatus("aiConfigStatus", `Failed to load AI config: ${error.message}`, { isError: true });
+    setInlineStatus("aiConfigStatus", `配置载入失败：${error.message}`, { isError: true });
   }
 }
 
@@ -2350,17 +2362,17 @@ async function saveAiConfigFromForm(event) {
   event.preventDefault();
 
   if (!window.desktopApp || typeof window.desktopApp.saveAiConfig !== "function") {
-    setInlineStatus("aiConfigStatus", "This build cannot save desktop AI config.", { isError: true });
+    setInlineStatus("aiConfigStatus", "当前版本不能保存桌面配置。", { isError: true });
     return;
   }
 
   const submitButton = $("btnSaveAiConfig");
-  const previousButtonText = submitButton?.textContent || "Save AI Config";
+  const previousButtonText = submitButton?.textContent || "保存";
   if (submitButton instanceof HTMLButtonElement) {
     submitButton.disabled = true;
-    submitButton.textContent = "Detecting...";
+    submitButton.textContent = "检测中";
   }
-  setInlineStatus("aiConfigStatus", "Trying API base URL and auth patterns automatically...");
+  setInlineStatus("aiConfigStatus", "正在检测连接。");
 
   try {
     const saved = await window.desktopApp.saveAiConfig(readAiConfigFormPayload());
@@ -2372,30 +2384,30 @@ async function saveAiConfigFromForm(event) {
     $("relayApiKeyPrefix").value = saved?.RELAY_API_KEY_PREFIX || "";
     const probe = saved?._probe;
     if (probe?.ok) {
-      const prefixLabel = probe.authPrefix ? probe.authPrefix.trim() || "(custom prefix)" : "raw key";
+      const prefixLabel = probe.authPrefix ? probe.authPrefix.trim() || "自定义前缀" : "原始 Key";
       const modelLabel = probe.detectedModel || saved?.RELAY_MODEL || "";
       setInlineStatus(
         "aiConfigStatus",
-        `AI config saved. Auto-detected ${probe.baseUrl}${probe.chatPath} with ${probe.authHeader} / ${prefixLabel}${
-          modelLabel ? ` / model ${modelLabel}` : ""
+        `已保存：${probe.baseUrl}${probe.chatPath} / ${probe.authHeader} / ${prefixLabel}${
+          modelLabel ? ` / ${modelLabel}` : ""
         }.`
       );
     } else if (probe?.skipped) {
       setInlineStatus(
         "aiConfigStatus",
-        `AI config saved. Auto-detect skipped: ${probe.reason || "missing required fields."}`
+        `已保存。检测跳过：${probe.reason || "缺少必要字段。"}`
       );
     } else if (probe?.error) {
       setInlineStatus(
         "aiConfigStatus",
-        `AI config saved, but auto-detect could not confirm the endpoint: ${probe.error}`,
+        `已保存，但连接未确认：${probe.error}`,
         { isError: true }
       );
     } else {
-      setInlineStatus("aiConfigStatus", "AI config saved. New chat requests will use the updated values.");
+      setInlineStatus("aiConfigStatus", "已保存。");
     }
   } catch (error) {
-    setInlineStatus("aiConfigStatus", `Failed to save AI config: ${error.message}`, { isError: true });
+    setInlineStatus("aiConfigStatus", `保存失败：${error.message}`, { isError: true });
   } finally {
     if (submitButton instanceof HTMLButtonElement) {
       submitButton.disabled = false;
@@ -2409,10 +2421,12 @@ function saveWorkspacePrefsFromForm() {
     ...state.workspacePrefs,
     defaultStartupView: $("defaultStartupView").value,
     defaultScheduleMode: $("defaultScheduleMode").value,
+    theme: $("darkModeEnabled")?.checked ? "dark" : "light",
   });
   persistWorkspacePrefs();
+  applyWorkspaceTheme();
   setScheduleMode(state.workspacePrefs.defaultScheduleMode);
-  setInlineStatus("workspacePrefsStatus", "Workspace defaults saved.");
+  setInlineStatus("workspacePrefsStatus", "已保存。");
 }
 
 function hookWorkspaceChrome() {
@@ -2448,6 +2462,12 @@ function hookWorkspaceChrome() {
   });
 
   $("btnSaveWorkspacePrefs")?.addEventListener("click", () => saveWorkspacePrefsFromForm());
+  $("btnThemeToggle")?.addEventListener("click", () =>
+    setWorkspaceTheme(state.workspacePrefs.theme === "dark" ? "light" : "dark")
+  );
+  $("darkModeEnabled")?.addEventListener("change", () =>
+    setWorkspaceTheme($("darkModeEnabled")?.checked ? "dark" : "light")
+  );
   $("btnSidebarCollapse")?.addEventListener("click", () => setNavCollapsed(!state.workspacePrefs.navCollapsed));
   $("btnScheduleSidebarCollapse")?.addEventListener("click", () =>
     setScheduleSidebarCollapsed(!state.scheduleViewPrefs.scheduleSidebarCollapsed)
@@ -2498,7 +2518,7 @@ function hookWorkspaceChrome() {
     persistData();
     renderLists();
     refreshScheduleFromRules().catch((error) => {
-      setInlineStatus("fixedEditorStatus", `Timed item deleted, but refresh failed: ${error.message}`, {
+      setInlineStatus("fixedEditorStatus", `已删除，但刷新失败：${error.message}`, {
         isError: true,
       });
     });
@@ -2515,7 +2535,7 @@ function hookWorkspaceChrome() {
     persistData();
     renderLists();
     refreshScheduleFromRules().catch((error) => {
-      setInlineStatus("taskEditorStatus", `Task rule deleted, but refresh failed: ${error.message}`, {
+      setInlineStatus("taskEditorStatus", `已删除，但刷新失败：${error.message}`, {
         isError: true,
       });
     });
@@ -2535,10 +2555,9 @@ function renderDesktopUi() {
     return;
   }
 
-  runtimeText.textContent = `Desktop mode active · v${info.version || "0.0.0"} · config and data live in your Windows app profile.`;
+  runtimeText.textContent = `桌面模式 · v${info.version || "0.0.0"}`;
   runtimeText.title = `${info.envPath || ""}\n${info.dataDir || ""}\n${info.workspaceStatePath || ""}`.trim();
-  storageNote.textContent =
-    "Desktop mode: workspace state is persisted to the app profile data folder, so schedules and preferences survive app restarts even when the local server port changes.";
+  storageNote.textContent = "本地保存日程与偏好。";
   banner.classList.remove("hidden");
 }
 
@@ -2589,13 +2608,13 @@ function renderChatMessages() {
     const row = document.createElement("div");
     row.className = `chat-row ${item.role}`;
     row.innerHTML = `
-      <div class="chat-role">${item.role === "assistant" ? "AI" : "You"}</div>
+      <div class="chat-role">${item.role === "assistant" ? "AI" : "你"}</div>
       <div class="chat-bubble">${escapeHtml(item.content).replace(/\n/g, "<br />")}</div>
       ${
         hasActions
           ? `<button class="btn tiny chat-apply-btn" type="button" data-chat-apply-index="${index}">
-               Apply from this reply (${item.actions.length})
-             </button>`
+               应用建议（${item.actions.length}）
+              </button>`
           : ""
       }
     `;
@@ -2657,38 +2676,259 @@ function normalizeAiActions(actions) {
 }
 
 function aiActionSummary(actions) {
-  if (!actions.length) return "No actionable change.";
+  if (!actions.length) return "没有可应用的改动。";
   return actions
     .map((action, index) => {
       if (action.type === "add_task_block") {
-        return `${index + 1}. Add: ${action.title || "(untitled)"} ${action.start}-${action.end}`;
+        return `${index + 1}. 新增：${action.title || "未命名"} ${action.start}-${action.end}`;
       }
       if (action.type === "move_block") {
-        return `${index + 1}. Move: ${action.matchTitle || "(match)"} -> ${action.start}-${action.end}`;
+        return `${index + 1}. 移动：${action.matchTitle || "匹配项"} -> ${action.start}-${action.end}`;
       }
       if (action.type === "remove_block") {
-        return `${index + 1}. Remove: ${action.matchTitle || "(match)"}`;
+        return `${index + 1}. 删除：${action.matchTitle || "匹配项"}`;
       }
-      return `${index + 1}. Unsupported action: ${action.type}`;
+      return `${index + 1}. 不支持：${action.type}`;
     })
     .join("\n");
 }
 
-function openAiApplyModal(actions) {
+function aiActionStatusLabel(status) {
+  switch (status) {
+    case "applied":
+      return "可应用";
+    case "ambiguous":
+      return "存在歧义";
+    case "conflict":
+      return "发生冲突";
+    case "invalid":
+      return "无效";
+    case "skipped":
+      return "已跳过";
+    default:
+      return "待处理";
+  }
+}
+
+function aiActionDetailClass(status) {
+  if (status === "conflict" || status === "invalid") return "error";
+  if (status === "ambiguous" || status === "skipped") return "warn";
+  return "";
+}
+
+function describeScheduleBlocksForAiPreview(blocks, maxCount = 3) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return "";
+
+  const preview = blocks
+    .slice(0, maxCount)
+    .map((block) => `${block.title || "未命名"} ${block.start || ""}-${block.end || ""}`.trim())
+    .join(" / ");
+
+  return blocks.length > maxCount ? `${preview} 等 ${blocks.length} 项` : preview;
+}
+
+function renderAiApplyPreview(preview, actions) {
   const modal = $("aiApplyModal");
   const summary = $("aiApplySummary");
-  if (!modal || !summary) return;
+  const details = $("aiApplyDetails");
+  const confirmBtn = $("btnConfirmAiApply");
+  if (!modal || !summary || !details || !confirmBtn) return;
 
-  summary.textContent = aiActionSummary(actions);
+  const results = Array.isArray(preview?.results) ? preview.results : [];
+  const counts = preview?.summary?.byStatus || {};
+  const appliedCount = Number(counts.applied) || 0;
+  const inputScheduleValid = preview?.summary?.inputScheduleValid !== false;
+
+  const summaryLines = [aiActionSummary(actions)];
+  if (!inputScheduleValid) {
+    summaryLines.push("当前日程本身存在冲突或无效区间，建议先修复后再应用 AI 改动。");
+  }
+  summaryLines.push(
+    `预检结果：可应用 ${appliedCount} 项，歧义 ${Number(counts.ambiguous) || 0} 项，冲突 ${
+      Number(counts.conflict) || 0
+    } 项，跳过 ${Number(counts.skipped) || 0} 项，无效 ${Number(counts.invalid) || 0} 项。`
+  );
+  summary.textContent = summaryLines.join("\n\n");
+
+  const detailItems = [];
+  if (!inputScheduleValid) {
+    const blockingIssues = Array.isArray(preview?.inputScheduleValidation?.blockingIssues)
+      ? preview.inputScheduleValidation.blockingIssues
+      : [];
+    for (const issue of blockingIssues) {
+      detailItems.push(
+        `<div class="modal-detail-item error"><strong>当前日程问题</strong><br />${escapeHtml(
+          issue?.message || ""
+        )}</div>`
+      );
+    }
+  }
+
+  for (const result of results) {
+    const extraLines = [];
+    const matchedText = describeScheduleBlocksForAiPreview(result?.matchedBlocks);
+    if (matchedText) extraLines.push(`匹配项：${matchedText}`);
+
+    const conflictText = describeScheduleBlocksForAiPreview(result?.conflictingBlocks);
+    if (conflictText) extraLines.push(`冲突项：${conflictText}`);
+
+    const diagnosticText = describeScheduleBlocksForAiPreview(result?.diagnosticMatches);
+    if (diagnosticText) extraLines.push(`相近项：${diagnosticText}`);
+
+    const detailHtml = [escapeHtml(result?.message || "")]
+      .concat(extraLines.map((line) => escapeHtml(line)))
+      .join("<br />");
+
+    detailItems.push(
+      `<div class="modal-detail-item ${aiActionDetailClass(result?.status)}"><strong>${escapeHtml(
+        `${Number(result?.index) + 1}. ${aiActionStatusLabel(result?.status)}`
+      )}</strong><br />${detailHtml}</div>`
+    );
+  }
+
+  details.innerHTML =
+    detailItems.join("") || '<div class="modal-detail-item">当前没有可应用的改动。</div>';
+  confirmBtn.disabled = !inputScheduleValid || appliedCount <= 0;
+  confirmBtn.textContent = appliedCount > 0 ? `应用 ${appliedCount} 项` : "无法应用";
+}
+
+function ensureAiActionScheduleBase() {
+  if (state.lastSchedule) return state.lastSchedule;
+
+  const targetDate = $("planDate").value || todayInputValue();
+  const dayEntry = findWeekDayEntry(targetDate);
+  state.lastSchedule =
+    dayEntry?.ok && dayEntry.result ? prepareSchedule(dayEntry.result) : buildEmptyDaySchedule(targetDate);
+  persistPlanState();
+  return state.lastSchedule;
+}
+
+function buildAiActionRequest(actions) {
+  const schedule = ensureAiActionScheduleBase();
+  return {
+    date: schedule?.date || $("planDate").value || todayInputValue(),
+    dayStart: schedule?.dayStart || FULL_DAY_START,
+    dayEnd: schedule?.dayEnd || FULL_DAY_END,
+    scheduleBlocks: Array.isArray(schedule?.blocks)
+      ? schedule.blocks.filter((block) => block.type !== "buffer").map(toOverrideBlockPayload)
+      : [],
+    actions: normalizeAiActions(actions),
+  };
+}
+
+async function previewAiActions(actions) {
+  const response = await api("/api/schedule-actions/preview", buildAiActionRequest(actions));
+  return response.result;
+}
+
+function reconcileCompletionState(schedule) {
+  const nextCompleted = {};
+  const activeTaskIds = new Set(
+    Array.isArray(schedule?.blocks)
+      ? schedule.blocks.filter((block) => block.type === "task").map((block) => block.runtimeId)
+      : []
+  );
+
+  for (const [runtimeId, completed] of Object.entries(state.completed || {})) {
+    if (activeTaskIds.has(runtimeId)) {
+      nextCompleted[runtimeId] = completed;
+    }
+  }
+
+  state.completed = nextCompleted;
+}
+
+function summarizeAppliedAiActionResult(result) {
+  const summary = {
+    changed: 0,
+    date: result?.nextSchedule?.date || result?.date || state.lastSchedule?.date || $("planDate").value || todayInputValue(),
+    runtimeIds: [],
+    removedTitles: [],
+    addedCount: 0,
+    movedCount: 0,
+    removedCount: 0,
+  };
+
+  const results = Array.isArray(result?.results) ? result.results : [];
+  for (const item of results) {
+    if (item?.status !== "applied") continue;
+    summary.changed += 1;
+
+    if (item.createdBlock?.runtimeId) {
+      summary.addedCount += 1;
+      summary.runtimeIds.push(item.createdBlock.runtimeId);
+      continue;
+    }
+
+    if (item.updatedBlock?.runtimeId) {
+      summary.movedCount += 1;
+      summary.runtimeIds.push(item.updatedBlock.runtimeId);
+      continue;
+    }
+
+    if (item.removedBlock?.title) {
+      summary.removedCount += 1;
+      summary.removedTitles.push(item.removedBlock.title);
+    }
+  }
+
+  summary.runtimeIds = [...new Set(summary.runtimeIds)];
+  summary.removedTitles = [...new Set(summary.removedTitles)];
+  return summary;
+}
+
+async function openAiApplyModal(actions) {
+  const normalizedActions = normalizeAiActions(actions);
+  const modal = $("aiApplyModal");
+  const summary = $("aiApplySummary");
+  const details = $("aiApplyDetails");
+  const confirmBtn = $("btnConfirmAiApply");
+  if (!modal || !summary || !details || !confirmBtn) return;
+
+  state.ui.pendingAiPreview = null;
+  state.ui.aiApplyPreviewRequestId += 1;
+  const requestId = state.ui.aiApplyPreviewRequestId;
+
+  summary.textContent = `${aiActionSummary(normalizedActions)}\n\n正在检查当前日程里的可应用结果...`;
+  details.innerHTML = "";
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = "检查中...";
   modal.classList.remove("hidden");
+
+  try {
+    await ensureScheduleHydrated({ preferMode: "day", renderLoading: false });
+    const preview = await previewAiActions(normalizedActions);
+    if (state.ui.aiApplyPreviewRequestId !== requestId || modal.classList.contains("hidden")) return;
+
+    state.ui.pendingAiPreview = preview;
+    renderAiApplyPreview(preview, normalizedActions);
+  } catch (error) {
+    if (state.ui.aiApplyPreviewRequestId !== requestId || modal.classList.contains("hidden")) return;
+
+    state.ui.pendingAiPreview = null;
+    summary.textContent = `${aiActionSummary(normalizedActions)}\n\n预检失败：${error.message}`;
+    details.innerHTML = `<div class="modal-detail-item error">${escapeHtml(error.message)}</div>`;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "无法应用";
+  }
 }
 
 function closeAiApplyModal() {
+  state.ui.pendingAiPreview = null;
+  state.ui.aiApplyPreviewRequestId += 1;
+  $("aiApplySummary")?.replaceChildren();
+  $("aiApplyDetails")?.replaceChildren();
+  const confirmBtn = $("btnConfirmAiApply");
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = "应用";
+  }
   $("aiApplyModal")?.classList.add("hidden");
 }
 
 function clearPendingAiProposal() {
   state.ui.pendingAiProposal = null;
+  state.ui.pendingAiPreview = null;
   updateAiProposalUi();
 }
 
@@ -2702,132 +2942,42 @@ function updateAiProposalUi() {
   if (discardBtn) discardBtn.classList.toggle("hidden", !hasProposal);
   if (hint) {
     hint.classList.toggle("hidden", !hasProposal);
-    hint.textContent = hasProposal
-      ? `AI proposal ready: ${state.ui.pendingAiProposal.length} action(s). You can review/apply anytime.`
-      : "";
+    hint.textContent = hasProposal ? `${state.ui.pendingAiProposal.length} 条建议待处理。` : "";
   }
 }
 
-function findTaskBlockByTitleMatch(matchTitle) {
-  if (!state.lastSchedule?.blocks?.length) return null;
-  const needle = String(matchTitle || "").trim().toLowerCase();
-  if (!needle) return null;
-  return (
-    state.lastSchedule.blocks.find(
-      (block) => block.type === "task" && String(block.title || "").toLowerCase().includes(needle)
-    ) || null
-  );
-}
-
-function applyAiActions(actions) {
-  const undoSnapshot = captureScheduleUndoSnapshot();
-  if (!state.lastSchedule) {
-    const targetDate = $("planDate").value || todayInputValue();
-    const dayEntry = findWeekDayEntry(targetDate);
-    if (dayEntry?.ok) {
-      setCurrentSchedule(dayEntry.result, { resetCompletion: false, scrollToFirstBlock: false });
-    } else {
-      state.lastSchedule = buildEmptyDaySchedule(targetDate);
-      persistPlanState();
-    }
-  }
-
-  if (!state.lastSchedule) {
+async function applyAiActions(actions) {
+  await ensureScheduleHydrated({ preferMode: "day", renderLoading: false });
+  const currentSchedule = ensureAiActionScheduleBase();
+  if (!currentSchedule) {
     throw new Error("当前没有可修改的日程。请先生成并加载某一天日程。");
   }
 
   ensureEditableWeekPlan();
 
-  let changed = 0;
-  let addedCount = 0;
-  let movedCount = 0;
-  let removedCount = 0;
-  const changedRuntimeIds = [];
-  const removedTitles = [];
-  for (const action of actions) {
-    if (action.type === "add_task_block") {
-      const startMin = parseTimeToMinutes(action.start);
-      const endMin = parseTimeToMinutes(action.end);
-      if (startMin == null || endMin == null || endMin <= startMin) continue;
+  const undoSnapshot = captureScheduleUndoSnapshot();
+  const response = await api("/api/schedule-actions/apply", buildAiActionRequest(actions));
+  const result = response.result;
+  const summary = summarizeAppliedAiActionResult(result);
 
-      const runtimeId = uid("blk");
-      state.lastSchedule.blocks.push(
-        prepareBlock({
-          type: "task",
-          id: uid("ai-task"),
-          runtimeId,
-          title: action.title || "AI Planned Task",
-          category: action.category || "other",
-          energy: action.energy || "medium",
-          priority: action.priority || 3,
-          startMin,
-          endMin,
-          manual: true,
-        })
-      );
-      changed += 1;
-      addedCount += 1;
-      changedRuntimeIds.push(runtimeId);
-      continue;
-    }
-
-    if (action.type === "move_block") {
-      const target = findTaskBlockByTitleMatch(action.matchTitle);
-      const startMin = parseTimeToMinutes(action.start);
-      const endMin = parseTimeToMinutes(action.end);
-      if (!target || startMin == null || endMin == null || endMin <= startMin) continue;
-
-      updateBlockTimes(target, startMin, endMin);
-      target.manual = true;
-      changed += 1;
-      movedCount += 1;
-      changedRuntimeIds.push(target.runtimeId);
-      continue;
-    }
-
-    if (action.type === "remove_block") {
-      const target = findTaskBlockByTitleMatch(action.matchTitle);
-      if (!target) continue;
-      state.lastSchedule.blocks = state.lastSchedule.blocks.filter((b) => b.runtimeId !== target.runtimeId);
-      delete state.completed[target.runtimeId];
-      changed += 1;
-      removedCount += 1;
-      removedTitles.push(target.title);
-    }
+  if (!result?.nextSchedule || summary.changed <= 0) {
+    return summary;
   }
 
-  if (changed === 0) {
-    return {
-      changed: 0,
-      date: state.lastSchedule?.date || $("planDate").value || todayInputValue(),
-      runtimeIds: [],
-      removedTitles: [],
-      addedCount: 0,
-      movedCount: 0,
-      removedCount: 0,
-    };
-  }
-
-  sortBlocks(state.lastSchedule.blocks);
-  state.lastSchedule = prepareSchedule(state.lastSchedule);
-  saveLocalDayOverride(state.lastSchedule.date, state.lastSchedule);
-  persistData();
-  const runtimeIds = [...new Set(changedRuntimeIds)];
-  renderSchedule(state.lastSchedule, { scrollToRuntimeId: runtimeIds[0] || null });
+  const nextSchedule = prepareSchedule(result.nextSchedule);
+  reconcileCompletionState(nextSchedule);
+  saveLocalDayOverride(nextSchedule.date, nextSchedule);
+  setCurrentSchedule(nextSchedule, {
+    resetCompletion: false,
+    scrollToFirstBlock: false,
+    scrollToRuntimeId: summary.runtimeIds[0] || null,
+  });
   syncCurrentScheduleToWeekPlan();
   registerScheduleUndo(undoSnapshot, {
-    changedDates: [state.lastSchedule.date],
+    changedDates: [nextSchedule.date],
     label: "已应用 AI 改动",
   });
-  return {
-    changed,
-    date: state.lastSchedule.date,
-    runtimeIds,
-    removedTitles,
-    addedCount,
-    movedCount,
-    removedCount,
-  };
+  return summary;
 }
 
 function focusScheduleFromAiResult(result) {
@@ -2921,7 +3071,7 @@ async function submitChatMessage(text) {
       content: item.content,
     }));
     const context = buildChatContext();
-    const streamMessageId = pushChatMessage("assistant", "Thinking...", { id: uid("chatmsg") });
+    const streamMessageId = pushChatMessage("assistant", "思考中...", { id: uid("chatmsg") });
     let streamText = "";
     let streamModel = "";
     let streamDone = false;
@@ -2979,11 +3129,9 @@ async function submitChatMessage(text) {
         if (eventType === "done") {
           streamDone = true;
           const actions = normalizeAiActions(payload.result?.actions || []);
-          const finalText = String(payload.result?.text || streamText || "AI returned empty content.");
-          const modelText = String(payload.result?.model || streamModel || "");
-          const monitorLine = `[monitor] actions=${actions.length}${modelText ? `, model=${modelText}` : ""}`;
+          const finalText = String(payload.result?.text || streamText || "AI 没有返回内容。");
           upsertChatMessageById(streamMessageId, {
-            content: `${finalText}\n\n${monitorLine}`,
+            content: finalText,
             actions,
           });
           if (actions.length > 0) {
@@ -2995,7 +3143,7 @@ async function submitChatMessage(text) {
         }
 
         if (eventType === "error") {
-          throw new Error(String(payload.error || "AI stream failed"));
+          throw new Error(String(payload.error || "AI 流式响应失败"));
         }
       };
 
@@ -3015,7 +3163,7 @@ async function submitChatMessage(text) {
       }
 
       if (!streamDone) {
-        throw new Error("AI stream interrupted");
+        throw new Error("AI 流式响应中断");
       }
     } catch {
       const res = await api("/api/chat", {
@@ -3024,10 +3172,9 @@ async function submitChatMessage(text) {
       });
 
       const actions = normalizeAiActions(res.result?.actions || []);
-      const replyText = res.result?.text || "AI returned empty content.";
-      const monitorLine = `[monitor] actions=${actions.length}${res.result?.model ? `, model=${res.result.model}` : ""}`;
+      const replyText = res.result?.text || "AI 没有返回内容。";
       upsertChatMessageById(streamMessageId, {
-        content: `${replyText}\n\n${monitorLine}`,
+        content: replyText,
         actions,
       });
 
@@ -3038,7 +3185,7 @@ async function submitChatMessage(text) {
       }
     }
   } catch (error) {
-    pushChatMessage("assistant", `AI request failed: ${error.message}`);
+    pushChatMessage("assistant", `请求失败：${error.message}`);
   } finally {
     setChatSending(false);
   }
@@ -4108,7 +4255,7 @@ function hookListDeletes() {
       persistData();
       renderLists();
       refreshScheduleFromRules().catch((error) => {
-        setInlineStatus("fixedEditorStatus", `Timed item deleted, but refresh failed: ${error.message}`, {
+        setInlineStatus("fixedEditorStatus", `已删除，但刷新失败：${error.message}`, {
           isError: true,
         });
       });
@@ -4124,7 +4271,7 @@ function hookListDeletes() {
       persistData();
       renderLists();
       refreshScheduleFromRules().catch((error) => {
-        setInlineStatus("taskEditorStatus", `Task rule deleted, but refresh failed: ${error.message}`, {
+        setInlineStatus("taskEditorStatus", `已删除，但刷新失败：${error.message}`, {
           isError: true,
         });
       });
@@ -4178,12 +4325,12 @@ function initForms() {
       existing.bufferMin = bufferMin;
       existing.daysOfWeek = normalizeAssignedDates(existing.assignedDates) ? existing.daysOfWeek : daysOfWeek;
       existing.assignedDates = normalizeAssignedDates(existing.assignedDates);
-      setInlineStatus("fixedEditorStatus", "Timed item saved.");
+      setInlineStatus("fixedEditorStatus", "已保存。");
     } else {
       const nextId = uid("fx");
       state.fixedEvents.push({ id: nextId, title, start, end, bufferMin, daysOfWeek, assignedDates: null });
       state.ui.selectedFixedId = nextId;
-      setInlineStatus("fixedEditorStatus", "Timed item created.");
+      setInlineStatus("fixedEditorStatus", "已创建。");
     }
 
     persistData();
@@ -4191,7 +4338,7 @@ function initForms() {
     try {
       await refreshScheduleFromRules();
     } catch (error) {
-      setInlineStatus("fixedEditorStatus", `Timed item saved, but refresh failed: ${error.message}`, {
+      setInlineStatus("fixedEditorStatus", `已保存，但刷新失败：${error.message}`, {
         isError: true,
       });
     }
@@ -4220,7 +4367,7 @@ function initForms() {
       existing.splitAllowed = splitAllowed;
       existing.daysOfWeek = daysOfWeek;
       existing.weeklyTargetCount = weeklyTargetCount;
-      setInlineStatus("taskEditorStatus", "Task rule saved.");
+      setInlineStatus("taskEditorStatus", "已保存。");
     } else {
       const nextId = uid("t");
       state.tasks.push({
@@ -4235,7 +4382,7 @@ function initForms() {
         weeklyTargetCount,
       });
       state.ui.selectedTaskId = nextId;
-      setInlineStatus("taskEditorStatus", "Task rule created.");
+      setInlineStatus("taskEditorStatus", "已创建。");
     }
 
     persistData();
@@ -4243,7 +4390,7 @@ function initForms() {
     try {
       await refreshScheduleFromRules();
     } catch (error) {
-      setInlineStatus("taskEditorStatus", `Task rule saved, but refresh failed: ${error.message}`, {
+      setInlineStatus("taskEditorStatus", `已保存，但刷新失败：${error.message}`, {
         isError: true,
       });
     }
@@ -4482,18 +4629,22 @@ function hookAiApplyModal() {
   });
 
   btnConfirm.addEventListener("click", async () => {
+    const previousLabel = btnConfirm.textContent || "应用";
     try {
       const actions = state.ui.pendingAiProposal || [];
-      await ensureScheduleHydrated({ preferMode: "day", renderLoading: true });
-      const result = applyAiActions(actions);
+      btnConfirm.disabled = true;
+      btnConfirm.textContent = "应用中...";
+      const result = await applyAiActions(actions);
       closeAiApplyModal();
       if (result.changed > 0) {
         clearPendingAiProposal();
         focusScheduleFromAiResult(result);
       } else {
-        alert("No valid changes were applied.");
+        alert("没有可应用的改动。");
       }
     } catch (error) {
+      btnConfirm.disabled = false;
+      btnConfirm.textContent = previousLabel;
       alert(error.message);
     }
   });
@@ -5810,33 +5961,57 @@ function hookWeekInteractions() {
   });
 }
 
-function hookScheduleZoomShortcuts() {
+function getScheduleWheelTarget(eventTarget) {
+  if (!(eventTarget instanceof Element)) return null;
+
   const scheduleView = $("viewSchedule");
-  if (!scheduleView) return;
+  if (!scheduleView || scheduleView.classList.contains("hidden")) return null;
+  if (!scheduleView.contains(eventTarget)) return null;
 
-  scheduleView.addEventListener(
-    "wheel",
-    (event) => {
-      if (state.ui.activeView !== "schedule") return;
-      if (event.ctrlKey) {
-        event.preventDefault();
+  return eventTarget.closest("#scheduleDayPanel, #scheduleWeekPanel");
+}
 
-        const direction = event.deltaY < 0 ? 1 : -1;
-        adjustScheduleZoom(state.ui.scheduleMode === "week" ? "week" : "day", direction);
-        return;
-      }
+function resolveScheduleWheelMode(panel) {
+  if (panel?.id === "scheduleDayPanel") return "day";
+  if (panel?.id === "scheduleWeekPanel") return "week";
+  return state.ui.scheduleMode === "week" ? "week" : "day";
+}
 
-      if (!event.altKey || state.ui.scheduleMode !== "week") return;
-      const weekFrame =
-        (event.target instanceof HTMLElement && event.target.closest("#scheduleWeekPanel")?.querySelector(".schedule-visual-frame")) ||
-        document.querySelector("#scheduleWeekPanel .schedule-visual-frame");
-      if (!(weekFrame instanceof HTMLElement)) return;
+function handleScheduleWheelShortcut(event) {
+  if (state.ui.activeView !== "schedule") return;
 
-      event.preventDefault();
-      weekFrame.scrollLeft += event.deltaY + event.deltaX;
-    },
-    { passive: false }
-  );
+  const panel = getScheduleWheelTarget(event.target);
+  if (!panel) return;
+
+  if (event.ctrlKey) {
+    if (event.cancelable) event.preventDefault();
+    event.stopPropagation();
+
+    const primaryDelta =
+      Math.abs(event.deltaY || 0) >= Math.abs(event.deltaX || 0) ? event.deltaY : event.deltaX;
+    if (!primaryDelta) return;
+
+    const direction = primaryDelta < 0 ? 1 : -1;
+    adjustScheduleZoom(resolveScheduleWheelMode(panel), direction);
+    return;
+  }
+
+  if (!event.altKey || resolveScheduleWheelMode(panel) !== "week") return;
+  const weekFrame =
+    (event.target instanceof Element && event.target.closest("#scheduleWeekPanel")?.querySelector(".schedule-visual-frame")) ||
+    document.querySelector("#scheduleWeekPanel .schedule-visual-frame");
+  if (!(weekFrame instanceof HTMLElement)) return;
+
+  if (event.cancelable) event.preventDefault();
+  event.stopPropagation();
+  weekFrame.scrollLeft += event.deltaY + event.deltaX;
+}
+
+function hookScheduleZoomShortcuts() {
+  document.addEventListener("wheel", handleScheduleWheelShortcut, {
+    passive: false,
+    capture: true,
+  });
 }
 
 function hookContextMenuActions() {
@@ -6007,13 +6182,6 @@ function renderWeekPlanGrid(container, plan, selectedDate) {
     const previewBlocks = (day.result?.blocks || []).filter((block) => block.type !== "buffer");
     const layoutMap = computeEventLayout(previewBlocks);
 
-    if (previewBlocks.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "week-day-empty";
-      empty.textContent = "空白";
-      column.appendChild(empty);
-    }
-
     for (const block of previewBlocks) {
       const position = layoutMap.get(block.runtimeId) || { column: 0, columnCount: 1 };
       const top = (block.startMin - FULL_DAY_START_MIN) * weekPixelsPerMinute;
@@ -6089,7 +6257,7 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
 
   const axisSide = document.createElement("div");
   axisSide.className = "week-lanes-axis-side";
-  axisSide.textContent = "Day / 24h";
+  axisSide.textContent = "日 / 24h";
   axisRow.appendChild(axisSide);
 
   const axisTrack = document.createElement("div");
@@ -6130,13 +6298,13 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
       <div class="week-lane-day-meta">
         ${
           day.ok
-            ? `${escapeHtml(String(day.summary?.taskCount || 0))} tasks / ${escapeHtml(
+            ? `${escapeHtml(String(day.summary?.taskCount || 0))} 任务 / ${escapeHtml(
                 String(day.summary?.fixedEventCount || 0)
-              )} timed`
-            : "conflict"
+              )} 固定`
+            : "冲突"
         }
       </div>
-      <div class="week-lane-day-note">${day.ok ? "Open Day view" : escapeHtml(day.error || "Cannot generate")}</div>
+      <div class="week-lane-day-note">${day.ok ? "" : escapeHtml(day.error || "无法生成")}</div>
     `;
     row.appendChild(dayButton);
 
@@ -6149,7 +6317,7 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
       const errorCard = document.createElement("div");
       errorCard.className = "week-lane-error";
       errorCard.innerHTML = `
-        <div class="week-lane-error-title">Conflict</div>
+        <div class="week-lane-error-title">冲突</div>
         <div>${escapeHtml(day.error || "存在冲突")}</div>
       `;
       track.appendChild(errorCard);
@@ -6172,13 +6340,6 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
       line.className = `week-lane-grid-line ${minute % 120 === 0 ? "major" : ""}`.trim();
       line.style.left = `${minute * lanePixelsPerMinute}px`;
       track.appendChild(line);
-    }
-
-    if (previewBlocks.length === 0) {
-      const empty = document.createElement("div");
-      empty.className = "week-lane-empty";
-      empty.textContent = "No scheduled tasks";
-      track.appendChild(empty);
     }
 
     for (const block of previewBlocks) {
@@ -6213,7 +6374,7 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
     if ((day.summary?.unscheduledCount || 0) > 0) {
       const marker = document.createElement("div");
       marker.className = "week-lane-unscheduled";
-      marker.textContent = `Unscheduled ${day.summary.unscheduledCount}`;
+      marker.textContent = `未排入 ${day.summary.unscheduledCount}`;
       track.appendChild(marker);
     }
 
@@ -6237,6 +6398,7 @@ function renderWeekPlan(plan) {
 
 function boot() {
   ensureChatSeed();
+  applyWorkspaceTheme();
   state.ui.scheduleMode = state.workspacePrefs.defaultScheduleMode;
   applyPlannerPrefsToForm();
   updatePlanDateValue($("planDate").value || todayInputValue());

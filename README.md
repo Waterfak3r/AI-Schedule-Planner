@@ -35,6 +35,12 @@ Build a Windows installer:
 npm run dist:win
 ```
 
+Run backend tests:
+
+```powershell
+npm test
+```
+
 Desktop runtime behavior:
 
 - Electron starts the local server internally on `127.0.0.1` with a dynamic port.
@@ -95,6 +101,7 @@ Relay-first env vars:
 - `RELAY_CHAT_PATH` (optional, default `/chat/completions`)
 - `RELAY_API_KEY_HEADER` (optional, default `Authorization`)
 - `RELAY_API_KEY_PREFIX` (optional, default `Bearer `)
+- `RELAY_TIMEOUT_MS` (optional, default `30000`, clamped to `1000`-`120000`)
 
 Legacy fallback env vars are still supported:
 
@@ -122,6 +129,41 @@ SSE event types:
 - `done`: final payload (`{ "result": { "text": "...", "actions": [...] } }`)
 - `error`: stream failure payload (`{ "error": "..." }`)
 
+Schedule action endpoints:
+
+- `POST /api/schedule-actions/preview`
+- `POST /api/schedule-actions/apply`
+
+Expected request body:
+
+```json
+{
+  "date": "2026-04-16",
+  "dayStart": "07:30",
+  "dayEnd": "23:30",
+  "scheduleBlocks": [
+    { "type": "task", "title": "Deep Work", "start": "10:00", "end": "11:00" },
+    { "type": "fixed", "title": "Class", "start": "13:00", "end": "14:00", "bufferMin": 15 }
+  ],
+  "actions": [
+    { "type": "move_block", "matchTitle": "Deep Work", "start": "15:00", "end": "16:00" }
+  ]
+}
+```
+
+Response highlights:
+
+- `normalizedActions`: normalized action inputs plus per-action normalization errors
+- `results`: per-action validation result with `applied` / `skipped` / `ambiguous` / `conflict` / `invalid`
+- `nextSchedule`: schedule snapshot after applying only successful actions in order
+
+Contract notes:
+
+- `preview` and `apply` are both stateless compute endpoints. They do not persist changes on the server.
+- `apply` currently differs only by `mode: "apply"` and future extension space; it still returns a computed `nextSchedule`.
+- `move_block` and `remove_block` execute only when `matchTitle` has exactly one exact title match in the current task blocks.
+- Substring or fuzzy matches may be returned as diagnostics, but they are never used as the execution target.
+
 ## Implementation Notes
 
 - Frontend chat history is stored in `localStorage` key: `asp.chatHistory`.
@@ -129,10 +171,11 @@ SSE event types:
 - Overrides are only reused when rule fingerprint matches current constraints/tasks.
 - Backend AI client lives in `server/aiClient.js`.
 
-## Next Step (AI Conversation UI)
+## Near-Term Backend Order
 
 Recommended next increments:
 
-1. Add richer structured tool mode for schedule operations (e.g., stricter slot validation, conflict-aware edits).
-2. Add chat memory scopes (today / this week / global preferences).
-3. Add explicit "apply AI suggestion" safety checks (preview conflicts before commit).
+1. Finish backend action validation / dry-run polish and wire future clients to consume it.
+2. Keep expanding backend tests around schedule rules and AI action edge cases.
+3. Add chat memory scopes (today / this week / global preferences).
+4. Defer frontend integration until the backend contract is stable enough to consume directly.

@@ -1,11 +1,19 @@
+const { normalizeActionList } = require("./scheduleActions");
+
 const DEFAULT_MODEL = process.env.RELAY_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const DEFAULT_BASE_URL =
   process.env.RELAY_BASE_URL || process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
 const DEFAULT_PATH = process.env.RELAY_CHAT_PATH || "/chat/completions";
 const DEFAULT_API_KEY_HEADER = process.env.RELAY_API_KEY_HEADER || "Authorization";
 const DEFAULT_API_KEY_PREFIX = process.env.RELAY_API_KEY_PREFIX || "Bearer ";
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-class AIConfigError extends Error {}
+class AIConfigError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "AIConfigError";
+  }
+}
 
 function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return [];
@@ -34,6 +42,7 @@ function buildSystemPrompt(context = {}) {
     "When the user wants direct schedule changes, do not skip the JSON block.",
     "Use exact existing task titles in matchTitle when moving or removing blocks.",
     "Do not include JSON wrapper unless user intent is to apply or modify schedule.",
+    "Chinese direct-edit requests are direct schedule changes too: for example, 把复习安排到19:00到19:30 means add_task_block with title 复习, start 19:00, end 19:30.",
   ];
 
   if (context?.planDate) {
@@ -61,6 +70,7 @@ function extractActions(text) {
   const reg = /<SCHEDULE_ACTIONS_JSON>([\s\S]*?)<\/SCHEDULE_ACTIONS_JSON>/i;
   const m = reg.exec(src);
   if (!m) {
+    let parseError = false;
     // Fallback 1: fenced json block
     const fenced = /```json\s*([\s\S]*?)```/i.exec(src);
     if (fenced) {
@@ -68,9 +78,9 @@ function extractActions(text) {
         const parsed = JSON.parse(fenced[1].trim());
         const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
         const cleaned = src.replace(fenced[0], "").trim();
-        return { cleanedText: cleaned, actions };
+        return { cleanedText: cleaned, actions, parseError };
       } catch {
-        // continue
+        parseError = true;
       }
     }
 
@@ -81,21 +91,23 @@ function extractActions(text) {
         const parsed = JSON.parse(inline[0].trim());
         const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
         const cleaned = src.replace(inline[0], "").trim();
-        return { cleanedText: cleaned, actions };
+        return { cleanedText: cleaned, actions, parseError };
       } catch {
-        // ignore
+        parseError = true;
       }
     }
 
-    return { cleanedText: src.trim(), actions: [] };
+    return { cleanedText: src.trim(), actions: [], parseError };
   }
 
   const jsonText = m[1].trim();
   let parsed = null;
+  let parseError = false;
   try {
     parsed = JSON.parse(jsonText);
   } catch {
     parsed = null;
+    parseError = true;
   }
 
   const actions = Array.isArray(parsed?.actions) ? parsed.actions : [];
@@ -104,6 +116,7 @@ function extractActions(text) {
   return {
     cleanedText: cleaned,
     actions,
+    parseError,
   };
 }
 
@@ -112,93 +125,155 @@ function getLastUserMessage(messages) {
   return String(lastUser?.content || "").trim();
 }
 
-function normalizeActionType(value) {
-  const key = String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s-]+/g, "_");
-  const aliasMap = {
-    add: "add_task_block",
-    add_block: "add_task_block",
-    add_task: "add_task_block",
-    create: "add_task_block",
-    create_task: "add_task_block",
-    create_block: "add_task_block",
-    insert: "add_task_block",
-    insert_task: "add_task_block",
-    new_task: "add_task_block",
-    schedule_task: "add_task_block",
-    move: "move_block",
-    move_task: "move_block",
-    move_task_block: "move_block",
-    reschedule: "move_block",
-    shift: "move_block",
-    update_time: "move_block",
-    update_block: "move_block",
-    relocate: "move_block",
-    remove: "remove_block",
-    delete: "remove_block",
-    remove_task: "remove_block",
-    delete_task: "remove_block",
-    cancel_task: "remove_block",
-  };
-  if (key === "add_task_block" || key === "move_block" || key === "remove_block") {
-    return key;
-  }
-  return aliasMap[key] || "";
-}
-
-function normalizeTimeText(value) {
-  return String(value || "").trim().replace(/[\uFF1A]/g, ":");
-}
-
-function normalizeCategory(value) {
-  const key = String(value || "").trim().toLowerCase();
-  return ["study", "code", "workout", "other"].includes(key) ? key : "other";
-}
-
-function normalizeEnergy(value) {
-  const key = String(value || "").trim().toLowerCase();
-  return ["high", "medium", "low"].includes(key) ? key : "medium";
-}
-
-function normalizeActionObject(raw) {
-  const type = normalizeActionType(raw?.type || raw?.action || raw?.kind || raw?.operation || raw?.op);
-  if (!type) return null;
-
-  const title = String(raw?.title || raw?.name || raw?.taskTitle || raw?.task || "").trim();
-  const fallbackMatch = String(raw?.match || raw?.target || raw?.targetTitle || raw?.titleMatch || "").trim();
-  const matchTitle = String(raw?.matchTitle || fallbackMatch || title).trim();
-  const start = normalizeTimeText(raw?.start || raw?.startTime || raw?.from || raw?.begin);
-  const end = normalizeTimeText(raw?.end || raw?.endTime || raw?.to || raw?.finish);
-  const action = {
-    type,
-    title,
-    matchTitle,
-    start,
-    end,
-    category: normalizeCategory(raw?.category),
-    energy: normalizeEnergy(raw?.energy),
-    priority: Number.isFinite(Number(raw?.priority)) ? Number(raw.priority) : 3,
-  };
-
-  if (type === "add_task_block" && (!action.title || !action.start || !action.end)) return null;
-  if (type === "move_block" && (!action.matchTitle || !action.start || !action.end)) return null;
-  if (type === "remove_block" && !action.matchTitle) return null;
-
-  return action;
-}
-
-function normalizeActionList(actions) {
-  if (!Array.isArray(actions)) return [];
-  return actions.map((action) => normalizeActionObject(action)).filter(Boolean);
-}
-
 function extractNormalizedActions(text) {
   const parsed = extractActions(text);
   return {
     cleanedText: parsed.cleanedText,
     actions: normalizeActionList(parsed.actions),
+    parseError: parsed.parseError,
+  };
+}
+
+function padHour(value) {
+  return String(Number.parseInt(String(value), 10)).padStart(2, "0");
+}
+
+function normalizeClockText(hour, minute) {
+  return `${padHour(hour)}:${String(minute).padStart(2, "0")}`;
+}
+
+function extractSimpleTimeRange(text) {
+  const src = String(text || "").replace(/\uFF1A/g, ":");
+  const match = /(?:^|[^\d])([01]?\d|2[0-3]):([0-5]\d)\s*(?:-|~|～|—|–|－|到|至)\s*([01]?\d|2[0-3]):([0-5]\d)(?!\d)/u.exec(src);
+  if (!match) return null;
+
+  return {
+    raw: match[0],
+    index: match.index,
+    start: normalizeClockText(match[1], match[2]),
+    end: normalizeClockText(match[3], match[4]),
+  };
+}
+
+function cleanupDerivedTitle(value) {
+  return String(value || "")
+    .replace(/[“”"'`]/g, "")
+    .replace(/^(?:请|麻烦|帮我|给我|我想|我要|需要|please)\s*/iu, "")
+    .replace(/(?:今天|今晚|明天|后天|上午|下午|晚上|中午|早上|tonight|today|tomorrow)/giu, "")
+    .replace(/(?:日程|计划|任务|事项|schedule|task)/giu, "")
+    .replace(/[，。,.!?！？；;：:]+$/u, "")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function inferAddActionTitle(userText, timeRange) {
+  const text = String(userText || "").replace(/\uFF1A/g, ":");
+  const withoutTime = text.replace(timeRange.raw, " ");
+  const patterns = [
+    /(?:把|将)\s*([^，。,.!?！？；;]+?)\s*(?:安排|排|放|加入|添加|新增|创建)(?:到|在|进)?/u,
+    /(?:安排|排|添加|新增|加上|创建)\s*([^，。,.!?！？；;]+?)(?:到|在|从|于|为|$)/u,
+    /\b(?:add|schedule|insert|create)\s+(.+?)\s+(?:from|at|between|to)\b/iu,
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(withoutTime);
+    const title = cleanupDerivedTitle(match?.[1]);
+    if (title) return title.slice(0, 80);
+  }
+
+  return "";
+}
+
+function inferCategoryFromTitle(title) {
+  const text = String(title || "").toLowerCase();
+  if (/复习|学习|作业|背|阅读|课|review|study|homework|read/.test(text)) return "study";
+  if (/代码|编程|开发|bug|code|debug|program/.test(text)) return "code";
+  if (/运动|健身|跑步|训练|workout|gym|run|exercise/.test(text)) return "workout";
+  return "other";
+}
+
+function shouldSkipLocalAddDerivation(text) {
+  return /(?:删除|移除|取消|移动|挪到|改到|提前|推迟|remove|delete|cancel|move|reschedule|postpone|delay)/iu.test(
+    String(text || "")
+  );
+}
+
+function deriveLocalAddActionsFromUserText(messages) {
+  const userText = getLastUserMessage(messages);
+  if (!userText || shouldSkipLocalAddDerivation(userText)) return null;
+
+  const timeRange = extractSimpleTimeRange(userText);
+  if (!timeRange) return null;
+
+  const title = inferAddActionTitle(userText, timeRange);
+  if (!title) return null;
+
+  return {
+    text: `已准备把“${title}”安排在 ${timeRange.start}-${timeRange.end}。`,
+    actions: [
+      {
+        type: "add_task_block",
+        title,
+        matchTitle: title,
+        start: timeRange.start,
+        end: timeRange.end,
+        category: inferCategoryFromTitle(title),
+        energy: "medium",
+        priority: 3,
+      },
+    ],
+  };
+}
+
+function shouldReplaceClarificationText(text) {
+  return /(?:请告诉我|告诉我|not enough information|tell me|could you|what .*task|任务\/活动名称)/iu.test(
+    String(text || "")
+  );
+}
+
+function buildPreparedActionText(actions) {
+  const safeActions = Array.isArray(actions) ? actions : [];
+  if (safeActions.length === 0) return "";
+
+  const first = safeActions[0] || {};
+  const title = String(first.title || first.matchTitle || "该任务").trim();
+  const countText = safeActions.length > 1 ? `等 ${safeActions.length} 项调整` : "";
+
+  if (first.type === "add_task_block") {
+    return `已准备把“${title}”安排在 ${first.start}-${first.end}${countText}。`;
+  }
+
+  if (first.type === "move_block") {
+    return `已准备把“${title}”移动到 ${first.start}-${first.end}${countText}。`;
+  }
+
+  if (first.type === "remove_block") {
+    return `已准备删除“${title}”${countText}。`;
+  }
+
+  return `已准备 ${safeActions.length} 项日程调整。`;
+}
+
+function reconcileScheduleActionOutput({ inputMessages, cleanedText, actions }) {
+  const safeActions = Array.isArray(actions) ? actions : [];
+
+  if (safeActions.length > 0) {
+    if (!cleanedText || shouldReplaceClarificationText(cleanedText)) {
+      return {
+        cleanedText: buildPreparedActionText(safeActions) || cleanedText,
+        actions: safeActions,
+      };
+    }
+
+    return { cleanedText, actions: safeActions };
+  }
+
+  const derived = deriveLocalAddActionsFromUserText(inputMessages);
+  if (!derived) return { cleanedText, actions: safeActions };
+
+  return {
+    cleanedText: derived.text,
+    actions: derived.actions,
   };
 }
 
@@ -216,7 +291,7 @@ function buildActionExtractionMessages({ inputMessages, assistantText, context }
     {
       role: "system",
       content:
-        "Convert schedule-editing intent into strict JSON only. Output only {\"actions\":[...]} with supported action types add_task_block, move_block, remove_block. Use HH:MM 24-hour time. Use exact existing task titles for matchTitle when moving or removing. If the user clearly wants direct schedule changes, prefer actionable JSON instead of returning an empty list. If there is not enough information for a safe direct change, output {\"actions\":[]}.",
+        "Convert schedule-editing intent into strict JSON only. Output only {\"actions\":[...]} with supported action types add_task_block, move_block, remove_block. Use HH:MM 24-hour time. Use exact existing task titles for matchTitle when moving or removing. If the user clearly wants direct schedule changes, prefer actionable JSON instead of returning an empty list. Chinese examples like '把复习安排到19:00到19:30' are enough information: use '复习' as the title. If there is not enough information for a safe direct change, output {\"actions\":[]}.",
     },
     {
       role: "user",
@@ -287,9 +362,42 @@ function looksLikeSchedulingIntent(messages) {
   );
 }
 
+function normalizeTimeoutMs(value) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
+  return Math.max(1_000, Math.min(120_000, parsed));
+}
+
+function buildChatUrl(baseUrl, chatPath) {
+  const safeBase = String(baseUrl || DEFAULT_BASE_URL).trim().replace(/\/+$/, "");
+  const safePath = String(chatPath || DEFAULT_PATH).trim().replace(/^\/+/, "");
+  return `${safeBase}/${safePath}`;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs, label) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function requestChatOnce({ baseUrl, chatPath, model, requestMessages, authCandidates }) {
   let lastFailure = null;
   let json = null;
+  const timeoutMs = normalizeTimeoutMs(process.env.RELAY_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS);
+  const chatUrl = buildChatUrl(baseUrl, chatPath);
 
   for (const [headerName, headerValue] of authCandidates) {
     const headers = {
@@ -297,15 +405,20 @@ async function requestChatOnce({ baseUrl, chatPath, model, requestMessages, auth
       [headerName]: headerValue,
     };
 
-    const response = await fetch(`${baseUrl}${chatPath}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: requestMessages,
-        temperature: 0.5,
-      }),
-    });
+    const response = await fetchWithTimeout(
+      chatUrl,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: requestMessages,
+          temperature: 0.5,
+        }),
+      },
+      timeoutMs,
+      "AI API request"
+    );
 
     const raw = await response.text();
     json = null;
@@ -340,6 +453,8 @@ async function requestChatStreamOnce({
   onMeta,
 }) {
   let lastFailure = null;
+  const timeoutMs = normalizeTimeoutMs(process.env.RELAY_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS);
+  const chatUrl = buildChatUrl(baseUrl, chatPath);
 
   for (const [headerName, headerValue] of authCandidates) {
     const headers = {
@@ -347,16 +462,21 @@ async function requestChatStreamOnce({
       [headerName]: headerValue,
     };
 
-    const response = await fetch(`${baseUrl}${chatPath}`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: requestMessages,
-        temperature: 0.5,
-        stream: true,
-      }),
-    });
+    const response = await fetchWithTimeout(
+      chatUrl,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: requestMessages,
+          temperature: 0.5,
+          stream: true,
+        }),
+      },
+      timeoutMs,
+      "AI API stream request"
+    );
 
     if (!response.ok || !response.body) {
       const raw = await response.text();
@@ -552,7 +672,7 @@ async function generateChatReply({ messages, context }) {
     authCandidates,
   });
   const firstText = extractTextFromChatCompletion(first.json);
-  let { cleanedText, actions } = extractNormalizedActions(firstText);
+  let { cleanedText, actions, parseError } = extractNormalizedActions(firstText);
 
   if (actions.length === 0 && looksLikeSchedulingIntent(inputMessages)) {
     const second = await requestChatOnce({
@@ -569,13 +689,24 @@ async function generateChatReply({ messages, context }) {
 
     const secondText = extractTextFromChatCompletion(second.json);
     const parsed = extractNormalizedActions(secondText);
+    parseError = parseError || parsed.parseError;
     if (parsed.actions.length > 0) {
       actions = parsed.actions;
     }
   }
 
+  ({ cleanedText, actions } = reconcileScheduleActionOutput({
+    inputMessages,
+    cleanedText,
+    actions,
+  }));
+
   if (!cleanedText && actions.length === 0) {
-    throw new Error("AI response is empty");
+    if (parseError) {
+      cleanedText = "I prepared a schedule change, but the action payload could not be parsed safely.";
+    } else {
+      throw new Error("AI response is empty");
+    }
   }
 
   return {
@@ -619,7 +750,7 @@ async function generateChatReplyStream({ messages, context, onDelta, onMeta }) {
     onMeta,
   });
 
-  let { cleanedText, actions } = extractNormalizedActions(streamed.text);
+  let { cleanedText, actions, parseError } = extractNormalizedActions(streamed.text);
 
   if (actions.length === 0 && looksLikeSchedulingIntent(inputMessages)) {
     const second = await requestChatOnce({
@@ -636,13 +767,24 @@ async function generateChatReplyStream({ messages, context, onDelta, onMeta }) {
 
     const secondText = extractTextFromChatCompletion(second.json);
     const parsed = extractNormalizedActions(secondText);
+    parseError = parseError || parsed.parseError;
     if (parsed.actions.length > 0) {
       actions = parsed.actions;
     }
   }
 
+  ({ cleanedText, actions } = reconcileScheduleActionOutput({
+    inputMessages,
+    cleanedText,
+    actions,
+  }));
+
   if (!cleanedText && actions.length === 0) {
-    throw new Error("AI response is empty");
+    if (parseError) {
+      cleanedText = "I prepared a schedule change, but the action payload could not be parsed safely.";
+    } else {
+      throw new Error("AI response is empty");
+    }
   }
 
   return {

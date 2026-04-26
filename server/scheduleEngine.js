@@ -311,7 +311,7 @@ function validateFixedEvents({ fixedEvents, dayStartMin, dayEndMin }) {
           makeIssue(
             "error",
             "FIXED_OVERLAP",
-            `“${left.title}” (${formatRange(left.startMin, left.endMin)}) 与 “${right.title}” (${formatRange(
+            `“${left.title}”(${formatRange(left.startMin, left.endMin)}) 与 “${right.title}”(${formatRange(
               right.startMin,
               right.endMin
             )}) 时间重叠`
@@ -341,6 +341,86 @@ function validateFixedEvents({ fixedEvents, dayStartMin, dayEndMin }) {
   }
 
   return issues;
+}
+
+function occupiedRangeForBlock(block) {
+  if (block.type === "fixed") {
+    const bufferMin = clampInt(block.bufferMin ?? 0, 0, MAX_BUFFER_MIN);
+    return {
+      startMin: block.blockedStartMin ?? block.startMin - bufferMin,
+      endMin: block.blockedEndMin ?? block.endMin + bufferMin,
+    };
+  }
+
+  return {
+    startMin: block.startMin,
+    endMin: block.endMin,
+  };
+}
+
+function formatBlockLabel(block) {
+  return `“${block.title}”(${formatRange(block.startMin, block.endMin)})`;
+}
+
+function classifyScheduleIssueStatus(issue) {
+  return /(?:OVERLAP|COLLISION|CONFLICT)/.test(String(issue?.code || "")) ? "conflict" : "invalid";
+}
+
+function validateScheduleSnapshot({ dayStartMin, dayEndMin, blocks }) {
+  const safeBlocks = Array.isArray(blocks) ? blocks : [];
+  const fixedEvents = safeBlocks.filter((block) => block?.type === "fixed");
+  const taskBlocks = safeBlocks.filter((block) => block?.type === "task");
+  const issues = [...validateFixedEvents({ fixedEvents, dayStartMin, dayEndMin })];
+  const dayRange = formatRange(dayStartMin, dayEndMin);
+
+  for (const task of taskBlocks) {
+    if (task.startMin < dayStartMin || task.endMin > dayEndMin) {
+      issues.push(
+        makeIssue("error", "TASK_OUTSIDE_DAY", `任务“${task.title}”超出今日可规划时间 ${dayRange}`)
+      );
+    }
+  }
+
+  for (let i = 0; i < taskBlocks.length; i += 1) {
+    for (let j = i + 1; j < taskBlocks.length; j += 1) {
+      const left = taskBlocks[i];
+      const right = taskBlocks[j];
+
+      if (intervalsOverlap(left.startMin, left.endMin, right.startMin, right.endMin)) {
+        issues.push(
+          makeIssue(
+            "error",
+            "TASK_OVERLAP",
+            `${formatBlockLabel(left)} 与 ${formatBlockLabel(right)} 时间重叠`
+          )
+        );
+      }
+    }
+  }
+
+  for (const task of taskBlocks) {
+    for (const fixedEvent of fixedEvents) {
+      const occupied = occupiedRangeForBlock(fixedEvent);
+      if (!intervalsOverlap(task.startMin, task.endMin, occupied.startMin, occupied.endMin)) continue;
+
+      issues.push(
+        makeIssue(
+          "error",
+          "TASK_CONFLICTS_FIXED",
+          `${formatBlockLabel(task)} 与固定日程 “${fixedEvent.title}” 的占用区间 ${formatRange(
+            occupied.startMin,
+            occupied.endMin
+          )} 冲突`
+        )
+      );
+    }
+  }
+
+  return {
+    issues,
+    blockingIssues: issues.filter((issue) => issue.level === "error"),
+    warningIssues: issues.filter((issue) => issue.level !== "error"),
+  };
 }
 
 function mergeIntervals(intervals) {
@@ -447,7 +527,7 @@ function placeTasks({ freeSlots, tasks, dayStartMin, dayEndMin }) {
     if (scheduled) continue;
 
     if (!task.splitAllowed) {
-      unscheduled.push({ ...task, reason: "没有可用时间块" });
+      unscheduled.push({ ...task, reason: "没有可用时间段" });
       continue;
     }
 
@@ -495,7 +575,7 @@ function placeTasks({ freeSlots, tasks, dayStartMin, dayEndMin }) {
       continue;
     }
 
-    unscheduled.push({ ...task, reason: "没有可用时间块" });
+    unscheduled.push({ ...task, reason: "没有可用时间段" });
   }
 
   return { placed, unscheduled };
@@ -580,8 +660,12 @@ function buildDaySchedule(input) {
     tasks: normalizedTasks,
     planningDate,
   });
-
-  const validationIssues = [...normalizeIssues, ...validateFixedEvents({ fixedEvents, dayStartMin, dayEndMin })];
+  const snapshotValidation = validateScheduleSnapshot({
+    dayStartMin,
+    dayEndMin,
+    blocks: fixedEvents,
+  });
+  const validationIssues = [...normalizeIssues, ...snapshotValidation.issues];
   const blockingIssues = validationIssues.filter((issue) => issue.level === "error");
   const warningIssues = validationIssues.filter((issue) => issue.level !== "error");
 
@@ -819,7 +903,7 @@ function buildWeekSchedule(input) {
     MAX_WEEK_DAY_COUNT
   );
 
-  const { events: normalizedFixed, issues: normalizeIssues } = normalizeFixedEvents(input?.fixedEvents);
+  const { events: normalizedFixed } = normalizeFixedEvents(input?.fixedEvents);
   const normalizedTasks = normalizeTasks(input?.tasks);
   const explicitTasks = normalizedTasks.filter((task) => !task.weeklyTargetCount);
   const targetTasks = normalizedTasks.filter((task) => task.weeklyTargetCount);
@@ -876,7 +960,9 @@ function buildWeekSchedule(input) {
           issueCount: error.issues.length,
           blockCount: 0,
           fixedEventCount: day.fixedEvents.length,
-          taskCount: effectiveTasks.filter((task) => taskAppliesToDate(task, { isoDate: day.isoDate, weekday: day.weekday })).length,
+          taskCount: effectiveTasks.filter((task) =>
+            taskAppliesToDate(task, { isoDate: day.isoDate, weekday: day.weekday })
+          ).length,
         },
       });
     }
@@ -898,4 +984,12 @@ module.exports = {
   buildWeekSchedule,
   ScheduleValidationError,
   PlannerInputError,
+  parseIsoDate,
+  toIsoDate,
+  formatRange,
+  intervalsOverlap,
+  classifyScheduleIssueStatus,
+  validateScheduleSnapshot,
+  buildDisplayBlocks,
+  summarizeBlocks,
 };

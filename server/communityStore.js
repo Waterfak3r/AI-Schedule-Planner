@@ -14,6 +14,7 @@ async function atomicWriteJson(filePath, data) {
   const dir = path.dirname(filePath);
   const tmp = path.join(dir, `${path.basename(filePath)}.${makeId("tmp")}.tmp`);
   const payload = JSON.stringify(data, null, 2);
+  await fsp.mkdir(dir, { recursive: true });
   await fsp.writeFile(tmp, payload, "utf8");
   await fsp.rename(tmp, filePath);
 }
@@ -34,12 +35,19 @@ class CommunityStore {
   }
 
   async _read() {
-    const raw = await fsp.readFile(this.filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.posts)) {
-      return { posts: [] };
+    try {
+      const raw = await fsp.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.posts)) {
+        return { posts: [] };
+      }
+      return parsed;
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        return { posts: [] };
+      }
+      throw error;
     }
-    return parsed;
   }
 
   async _write(next) {
@@ -75,10 +83,18 @@ class CommunityStore {
   async addPost({ text, tags = [] }) {
     return this._withLock(async () => {
       const data = await this._read();
+      const safeText = String(text || "").trim().slice(0, 2000);
+      const safeTags = Array.isArray(tags)
+        ? tags
+            .map((tag) => String(tag || "").trim())
+            .filter(Boolean)
+            .slice(0, 6)
+        : [];
+
       const post = {
         id: makeId("post"),
-        text,
-        tags: tags.map(String).slice(0, 6),
+        text: safeText,
+        tags: safeTags,
         likes: 0,
         createdAt: nowIso(),
       };
@@ -91,7 +107,8 @@ class CommunityStore {
   async like(id) {
     return this._withLock(async () => {
       const data = await this._read();
-      const post = data.posts.find((p) => p.id === id);
+      const safeId = String(id || "").trim();
+      const post = data.posts.find((p) => p.id === safeId);
       if (!post) return null;
       post.likes = (post.likes || 0) + 1;
       await this._write(data);
@@ -101,4 +118,3 @@ class CommunityStore {
 }
 
 module.exports = { CommunityStore };
-

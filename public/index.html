@@ -14,8 +14,7 @@
             <div class="brand">
               <div class="logo">ASP</div>
               <div class="brand-text">
-                <div class="title">AI Schedule Planner</div>
-                <div class="subtitle">Desktop workspace for chat, schedule graph, and planner settings.</div>
+                <div class="title">Schedule</div>
               </div>
             </div>
             <button
@@ -27,28 +26,28 @@
             >
               &lt;
             </button>
+            <button
+              id="btnThemeToggle"
+              class="icon-button theme-toggle-button"
+              type="button"
+              aria-label="切换深色模式"
+              title="切换深色模式"
+            >
+              ◐
+            </button>
           </div>
 
-          <div class="sidebar-note">
-            Open into Chat when there is no schedule yet. Generate a plan first, then switch to Schedule for the 24h graph.
-          </div>
         </div>
 
         <nav class="sidebar-nav">
           <button id="navViewChat" class="nav-button active" type="button" data-view="chat">
-            <span class="nav-kicker">Workspace</span>
-            <span class="nav-title">Chat</span>
-            <span class="nav-subtitle">Talk to AI, break down goals, and collect schedule proposals.</span>
+            <span class="nav-title">对话</span>
           </button>
           <button id="navViewSchedule" class="nav-button" type="button" data-view="schedule">
-            <span class="nav-kicker">Workspace</span>
-            <span class="nav-title">Schedule</span>
-            <span class="nav-subtitle">Switch between week and day 24h visual views.</span>
+            <span class="nav-title">日程</span>
           </button>
           <button id="navViewSettings" class="nav-button" type="button" data-view="settings">
-            <span class="nav-kicker">Workspace</span>
-            <span class="nav-title">Settings</span>
-            <span class="nav-subtitle">Defaults, AI API access, and rule editors.</span>
+            <span class="nav-title">设置</span>
           </button>
         </nav>
       </aside>
@@ -57,31 +56,29 @@
         <section id="viewChat" class="workspace-view chat-view" data-view-panel="chat">
           <div class="view-head">
             <div>
-              <div class="view-kicker">Workspace / Chat</div>
-              <h1>AI Chat</h1>
-              <div class="view-copy">When there is no schedule yet, the home screen stays focused on the conversation. Use this view to ask for planning help first.</div>
+              <h1>对话</h1>
             </div>
             <div class="row">
-              <button id="btnAiProposalReview" class="btn tiny hidden" type="button">Review Proposal</button>
-              <button id="btnAiProposalDiscard" class="btn tiny hidden" type="button">Discard Proposal</button>
-              <button id="btnChatClear" class="btn tiny" type="button">Clear</button>
+              <button id="btnAiProposalReview" class="btn tiny hidden" type="button">查看建议</button>
+              <button id="btnAiProposalDiscard" class="btn tiny hidden" type="button">丢弃</button>
+              <button id="btnChatClear" class="btn tiny" type="button">清空</button>
             </div>
           </div>
 
           <div id="aiProposalHint" class="modal-note hidden"></div>
 
-          <section class="card chat-surface">
+          <section class="chat-surface">
             <div id="chatMessages" class="chat-messages chat-messages-large"></div>
 
             <div class="chat-prompts">
-              <button class="btn tiny" type="button" data-chat-prompt="Help me plan tonight in 2 hours.">Plan tonight</button>
-              <button class="btn tiny" type="button" data-chat-prompt="Give me a focused morning schedule.">Morning focus</button>
-              <button class="btn tiny" type="button" data-chat-prompt="How should I adjust if I missed one key task?">Missed task fix</button>
+              <button class="btn tiny" type="button" data-chat-prompt="帮我安排今晚 2 小时。">今晚</button>
+              <button class="btn tiny" type="button" data-chat-prompt="给我一个专注的上午安排。">上午</button>
+              <button class="btn tiny" type="button" data-chat-prompt="如果我漏掉了一个关键任务，今天怎么调整？">补救</button>
             </div>
 
             <form id="chatForm" class="chat-form">
-              <input id="chatInput" class="input" placeholder="Ask for schedule advice..." maxlength="1000" />
-              <button id="btnChatSend" class="btn primary" type="submit">Send</button>
+              <input id="chatInput" class="input" placeholder="输入你的计划、限制或调整要求" maxlength="1000" />
+              <button id="btnChatSend" class="btn primary" type="submit">发送</button>
             </form>
           </section>
         </section>
@@ -91,106 +88,99 @@
 
           <div id="scheduleShell" class="schedule-shell">
             <aside class="schedule-sidebar-panel">
-              <section id="scheduleSectionPlanner" class="card schedule-sidebar-card">
-                <div class="schedule-sidebar-card-head">
-                  <div class="schedule-sidebar-section-label">Planner</div>
-                  <button
-                    id="btnToggleScheduleSectionPlanner"
-                    class="icon-button schedule-section-toggle"
-                    type="button"
-                    aria-label="Collapse planner panel"
-                    aria-expanded="true"
-                    aria-controls="scheduleSectionPlannerBody"
-                  >
-                    -
-                  </button>
-                </div>
-                <div id="scheduleSectionPlannerBody" class="schedule-sidebar-card-body">
-                  <div class="schedule-action-stack">
-                  <button id="btnGenerate" class="btn primary" type="button">Generate Day</button>
-                  <button id="btnQuickStart" class="btn secondary" type="button">Quick Example</button>
+              <div class="schedule-sidebar-frame">
+                <section id="scheduleSectionPlanner" class="schedule-sidebar-section">
+                  <div class="schedule-sidebar-card-head">
+                    <div class="schedule-sidebar-section-label">规划</div>
+                    <button
+                      id="btnToggleScheduleSectionPlanner"
+                      class="icon-button schedule-section-toggle"
+                      type="button"
+                      aria-label="Collapse planner panel"
+                      aria-expanded="true"
+                      aria-controls="scheduleSectionPlannerBody"
+                    >
+                      -
+                    </button>
                   </div>
-                </div>
-              </section>
+                  <div id="scheduleSectionPlannerBody" class="schedule-sidebar-card-body">
+                    <div class="schedule-action-stack">
+                      <button id="btnGenerate" class="btn primary" type="button">生成今日</button>
+                      <button id="btnQuickStart" class="btn secondary" type="button">示例</button>
+                    </div>
+                  </div>
+                </section>
 
-              <section id="scheduleSectionCalendar" class="card schedule-sidebar-card schedule-mini-calendar-card">
-                <div class="schedule-sidebar-card-head">
-                  <div class="schedule-sidebar-section-label">Calendar</div>
-                  <button
-                    id="btnToggleScheduleSectionCalendar"
-                    class="icon-button schedule-section-toggle"
-                    type="button"
-                    aria-label="Collapse calendar panel"
-                    aria-expanded="true"
-                    aria-controls="scheduleSectionCalendarBody"
-                  >
-                    -
-                  </button>
-                </div>
-                <div id="scheduleSectionCalendarBody" class="schedule-sidebar-card-body">
-                  <div class="schedule-mini-calendar-head">
-                    <button id="btnMiniMonthPrev" class="icon-button" type="button" aria-label="Previous month">&lt;</button>
-                    <div id="miniMonthLabel" class="schedule-mini-calendar-title">April 2026</div>
-                    <button id="btnMiniMonthNext" class="icon-button" type="button" aria-label="Next month">&gt;</button>
+                <section id="scheduleSectionCalendar" class="schedule-sidebar-section schedule-mini-calendar-card">
+                  <div class="schedule-sidebar-card-head">
+                    <div class="schedule-sidebar-section-label">日历</div>
+                    <button
+                      id="btnToggleScheduleSectionCalendar"
+                      class="icon-button schedule-section-toggle"
+                      type="button"
+                      aria-label="Collapse calendar panel"
+                      aria-expanded="true"
+                      aria-controls="scheduleSectionCalendarBody"
+                    >
+                      -
+                    </button>
                   </div>
-                  <div class="mini-month-weekdays">
-                    <span>S</span>
-                    <span>M</span>
-                    <span>T</span>
-                    <span>W</span>
-                    <span>T</span>
-                    <span>F</span>
-                    <span>S</span>
+                  <div id="scheduleSectionCalendarBody" class="schedule-sidebar-card-body">
+                    <div class="schedule-mini-calendar-head">
+                      <button id="btnMiniMonthPrev" class="icon-button" type="button" aria-label="Previous month">&lt;</button>
+                      <div id="miniMonthLabel" class="schedule-mini-calendar-title">April 2026</div>
+                      <button id="btnMiniMonthNext" class="icon-button" type="button" aria-label="Next month">&gt;</button>
+                    </div>
+                    <div class="mini-month-weekdays">
+                      <span>日</span>
+                      <span>一</span>
+                      <span>二</span>
+                      <span>三</span>
+                      <span>四</span>
+                      <span>五</span>
+                      <span>六</span>
+                    </div>
+                    <div id="miniMonthGrid" class="mini-month-grid"></div>
                   </div>
-                  <div id="miniMonthGrid" class="mini-month-grid"></div>
-                </div>
-              </section>
+                </section>
 
-              <section id="scheduleSectionOptions" class="card schedule-sidebar-card schedule-options-card">
-                <div class="schedule-sidebar-card-head">
-                  <div class="subhead">
-                    <h2>View Options</h2>
-                    <div class="schedule-shortcut-note">Ctrl + Wheel zoom</div>
+                <section id="scheduleSectionOptions" class="schedule-sidebar-section schedule-options-card">
+                  <div class="schedule-sidebar-card-head">
+                    <div class="subhead">
+                      <h2>选项</h2>
+                    </div>
+                    <button
+                      id="btnToggleScheduleSectionOptions"
+                      class="icon-button schedule-section-toggle"
+                      type="button"
+                      aria-label="Collapse view options panel"
+                      aria-expanded="true"
+                      aria-controls="scheduleSectionOptionsBody"
+                    >
+                      -
+                    </button>
                   </div>
-                  <button
-                    id="btnToggleScheduleSectionOptions"
-                    class="icon-button schedule-section-toggle"
-                    type="button"
-                    aria-label="Collapse view options panel"
-                    aria-expanded="true"
-                    aria-controls="scheduleSectionOptionsBody"
-                  >
-                    -
-                  </button>
-                </div>
 
-                <div id="scheduleSectionOptionsBody" class="schedule-sidebar-card-body">
-                  <div class="stack compact-stack">
-                    <label class="field compact-field">
-                      <span>Wake Time</span>
-                      <input id="wakeTime" type="time" value="07:30" />
-                    </label>
-                    <label class="field compact-field">
-                      <span>Bed Time</span>
-                      <input id="bedtime" type="time" value="23:30" />
-                    </label>
-                    <label class="field compact-field">
-                      <span>Tone</span>
-                      <select id="tone">
-                        <option value="gentle">Gentle</option>
-                        <option value="snarky" selected>Snarky</option>
-                        <option value="roast">Roast</option>
-                      </select>
-                    </label>
+                  <div id="scheduleSectionOptionsBody" class="schedule-sidebar-card-body">
+                    <div class="stack compact-stack">
+                      <label class="field compact-field">
+                        <span>起床</span>
+                        <input id="wakeTime" type="time" value="07:30" />
+                      </label>
+                      <label class="field compact-field">
+                        <span>睡觉</span>
+                        <input id="bedtime" type="time" value="23:30" />
+                      </label>
+                    </div>
                   </div>
-                </div>
-              </section>
+                </section>
+              </div>
             </aside>
 
             <div class="schedule-main-stage">
-              <div class="card schedule-topbar">
+              <div class="schedule-topbar">
                 <div class="schedule-topbar-left">
-                  <button id="btnScheduleToday" class="btn secondary" type="button">Today</button>
+                  <button id="btnScheduleToday" class="btn secondary" type="button">今天</button>
                   <div class="schedule-nav-cluster">
                     <button id="btnSchedulePrev" class="icon-button" type="button" aria-label="Previous period">&lt;</button>
                     <button id="btnScheduleNext" class="icon-button" type="button" aria-label="Next period">&gt;</button>
@@ -199,85 +189,83 @@
                 </div>
 
                 <div class="schedule-topbar-right">
-                  <button id="btnScheduleSidebarCollapse" class="btn secondary" type="button">Hide Panels</button>
+                  <button id="btnScheduleSidebarCollapse" class="btn secondary" type="button">面板</button>
                   <div class="segmented">
-                    <button id="btnScheduleModeWeek" class="segment-btn active" type="button" data-schedule-mode="week">Week</button>
-                    <button id="btnScheduleModeDay" class="segment-btn" type="button" data-schedule-mode="day">Day</button>
+                    <button id="btnScheduleModeWeek" class="segment-btn active" type="button" data-schedule-mode="week">周</button>
+                    <button id="btnScheduleModeDay" class="segment-btn" type="button" data-schedule-mode="day">日</button>
                   </div>
-                  <button id="btnToggleDayUtilities" class="btn secondary" type="button">Show Tools</button>
-                  <button id="btnCalendarSettings" class="btn secondary" type="button">Calendar Settings</button>
-                  <div class="pill" id="scheduleZoomPreview">Zoom 100%</div>
-                  <div class="pill" id="weekZoomPreview">Zoom 100%</div>
+                  <button id="btnToggleDayUtilities" class="btn secondary" type="button">工具</button>
+                  <button id="btnCalendarSettings" class="btn secondary" type="button">日历设置</button>
+                  <div class="pill" id="scheduleZoomPreview">100%</div>
+                  <div class="pill" id="weekZoomPreview">100%</div>
                 </div>
               </div>
 
               <div id="scheduleAiBanner" class="schedule-ai-banner hidden">
                 <div id="scheduleAiBannerText" class="schedule-ai-banner-text"></div>
                 <div class="row">
-                  <button id="btnScheduleAiJumpDay" class="btn tiny" type="button">Day View</button>
-                  <button id="btnScheduleAiJumpWeek" class="btn tiny" type="button">Week View</button>
-                  <button id="btnScheduleAiClear" class="btn tiny" type="button">Dismiss</button>
+                  <button id="btnScheduleAiJumpDay" class="btn tiny" type="button">日</button>
+                  <button id="btnScheduleAiJumpWeek" class="btn tiny" type="button">周</button>
+                  <button id="btnScheduleAiClear" class="btn tiny" type="button">关闭</button>
                 </div>
               </div>
 
               <div class="schedule-body-shell">
                 <section id="scheduleDayPanel" class="schedule-mode-panel hidden">
                   <div id="dayWorkbench" class="day-workbench">
-                    <section class="card schedule-visual-card">
+                    <section class="schedule-visual-card">
                       <div id="scheduleToolbar" class="calendar-toolbar schedule-panel-toolbar">
                         <div class="calendar-toolbar-group">
                           <div class="pill" id="dayRange">-</div>
-                          <div class="pill" id="progress">Done 0%</div>
-                          <div class="calendar-hint">Drag blocks to change time. Right-click for quick actions.</div>
+                          <div class="pill" id="progress">完成 0%</div>
                         </div>
 
                         <div class="calendar-toolbar-group">
                           <label class="toggle-chip">
                             <input id="toggleBuffers" type="checkbox" checked />
-                            <span>Show Buffers</span>
+                            <span>缓冲</span>
                           </label>
-                          <div class="pill" id="calendarSnapPreview">Snap 15 min</div>
+                          <div class="pill" id="calendarSnapPreview">15 分钟</div>
                         </div>
                       </div>
 
                       <div class="schedule-visual-frame">
                         <div id="scheduleIssues" class="issues hidden"></div>
                         <div id="schedule" class="schedule">
-                          <div class="empty-state">Loading calendar...</div>
+                          <div class="empty-state">加载中</div>
                         </div>
                       </div>
                     </section>
 
-                    <aside id="scheduleDayUtilities" class="card reminder-sidecard hidden">
+                    <aside id="scheduleDayUtilities" class="reminder-sidecard hidden">
                       <div class="subhead">
-                        <h2>Reminder + Share</h2>
-                        <button id="btnCopyReminder" class="btn tiny" type="button">Copy</button>
+                        <h2>提醒</h2>
+                        <button id="btnCopyReminder" class="btn tiny" type="button">复制</button>
                       </div>
 
                       <div class="stack">
                         <div class="row">
-                          <button id="btnReminder" class="btn secondary" type="button">Generate Reminder</button>
-                          <button id="btnShare" class="btn secondary" type="button">Generate Share Card</button>
+                          <button id="btnReminder" class="btn secondary" type="button">生成提醒</button>
+                          <button id="btnShare" class="btn secondary" type="button">分享图</button>
                         </div>
 
-                        <div id="reminder" class="reminder">(Generate a day schedule first, then create reminder from completion stats)</div>
+                        <div id="reminder" class="reminder">先生成日程</div>
                         <canvas id="shareCanvas" width="1080" height="1350" class="canvas"></canvas>
-                        <a id="downloadLink" class="btn primary hidden" download="sleep-card.png">Download PNG</a>
+                        <a id="downloadLink" class="btn primary hidden" download="sleep-card.png">下载 PNG</a>
                       </div>
                     </aside>
                   </div>
                 </section>
 
                 <section id="scheduleWeekPanel" class="schedule-mode-panel">
-                  <section class="card schedule-visual-card">
+                  <section class="schedule-visual-card">
                     <div class="calendar-toolbar schedule-panel-toolbar">
                       <div class="calendar-toolbar-group">
                         <div class="pill" id="weekRange">-</div>
-                        <div class="calendar-hint">Week schedule stays in sync automatically with your current rules and edits.</div>
                       </div>
                     </div>
                     <div class="schedule-visual-frame">
-                      <div id="weekPlan" class="empty-state">Loading week view...</div>
+                      <div id="weekPlan" class="empty-state">加载中</div>
                     </div>
                   </section>
                 </section>
@@ -289,56 +277,55 @@
         <section id="viewSettings" class="workspace-view settings-view hidden" data-view-panel="settings">
           <div class="view-head">
             <div>
-              <div class="view-kicker">Workspace / Settings</div>
-              <h1>Settings</h1>
-              <div class="view-copy">Switch between compact setting categories instead of scrolling through one large page.</div>
+              <h1>设置</h1>
             </div>
           </div>
 
           <div class="settings-shell">
             <aside class="settings-rail">
               <button class="settings-nav-button active" type="button" data-settings-section="app">
-                <span class="nav-title">App</span>
-                <span class="nav-subtitle">Startup and default windows</span>
+                <span class="nav-title">应用</span>
               </button>
               <button class="settings-nav-button" type="button" data-settings-section="ai">
                 <span class="nav-title">AI</span>
-                <span class="nav-subtitle">API connection and desktop config</span>
               </button>
               <button class="settings-nav-button" type="button" data-settings-section="rules">
-                <span class="nav-title">Rules</span>
-                <span class="nav-subtitle">Timed items and recurring tasks</span>
+                <span class="nav-title">规则</span>
               </button>
               <button class="settings-nav-button" type="button" data-settings-section="community">
-                <span class="nav-title">Community</span>
-                <span class="nav-subtitle">Local lab posts and reminders</span>
+                <span class="nav-title">社区</span>
               </button>
             </aside>
 
             <div class="settings-stage">
-              <section class="card settings-panel" data-settings-panel="app">
+              <section class="settings-panel" data-settings-panel="app">
                 <div class="subhead">
-                  <h2>App Defaults</h2>
-                  <button id="btnSaveWorkspacePrefs" class="btn tiny" type="button">Save Defaults</button>
+                  <h2>默认</h2>
+                  <button id="btnSaveWorkspacePrefs" class="btn tiny" type="button">保存</button>
                 </div>
 
                 <div class="settings-panel-body">
                   <div class="settings-inline-grid">
                     <label class="field">
-                      <span>Default Window</span>
+                      <span>启动页面</span>
                       <select id="defaultStartupView" class="input select full">
-                        <option value="chat">Chat</option>
-                        <option value="schedule">Schedule</option>
-                        <option value="settings">Settings</option>
+                        <option value="chat">对话</option>
+                        <option value="schedule">日程</option>
+                        <option value="settings">设置</option>
                       </select>
                     </label>
 
                     <label class="field">
-                      <span>Default Schedule Page</span>
+                      <span>日程视图</span>
                       <select id="defaultScheduleMode" class="input select full">
-                        <option value="week">Week</option>
-                        <option value="day">Day</option>
+                        <option value="week">周</option>
+                        <option value="day">日</option>
                       </select>
+                    </label>
+
+                    <label class="checkbox settings-checkbox-card">
+                      <input id="darkModeEnabled" type="checkbox" />
+                      <span>深色模式</span>
                     </label>
                   </div>
 
@@ -346,16 +333,27 @@
                 </div>
               </section>
 
-              <section class="card settings-panel hidden" data-settings-panel="ai">
+              <section class="settings-panel hidden" data-settings-panel="ai">
                 <div class="subhead">
                   <h2>AI API</h2>
                   <div class="row">
-                    <button id="btnDesktopOpenConfig" class="btn tiny" type="button">Open Config</button>
-                    <button id="btnDesktopOpenData" class="btn tiny" type="button">Open Data Folder</button>
+                    <button id="btnDesktopOpenConfig" class="btn tiny" type="button">配置</button>
+                    <button id="btnDesktopOpenData" class="btn tiny" type="button">数据</button>
                   </div>
                 </div>
 
                 <div class="settings-panel-body">
+                  <div class="settings-inline-grid">
+                    <label class="field">
+                      <span>回复语气</span>
+                      <select id="tone" class="input select full">
+                        <option value="gentle">温和</option>
+                        <option value="snarky" selected>直接</option>
+                        <option value="roast">狠一点</option>
+                      </select>
+                    </label>
+                  </div>
+
                   <form id="aiConfigForm" class="stack">
                     <label class="field">
                       <span>Base URL</span>
@@ -390,74 +388,72 @@
                     </div>
 
                     <div class="row">
-                      <button id="btnSaveAiConfig" class="btn primary" type="submit">Save AI Config</button>
+                      <button id="btnSaveAiConfig" class="btn primary" type="submit">保存</button>
                     </div>
 
                     <div id="aiConfigStatus" class="modal-note hidden"></div>
                   </form>
 
-                  <div id="storageNote" class="hint">
-                    Desktop mode stores Chromium data and backend files in the app profile.
-                  </div>
+                  <div id="storageNote" class="hint">桌面版使用本地配置。</div>
                   <div id="desktopBanner" class="desktop-banner hidden">
-                    <div id="desktopRuntimeText" class="desktop-runtime-text">Desktop mode is active.</div>
+                    <div id="desktopRuntimeText" class="desktop-runtime-text">桌面模式</div>
                   </div>
                 </div>
               </section>
 
-              <section class="settings-panel hidden" data-settings-panel="rules">
+              <section class="settings-panel settings-panel-rules hidden" data-settings-panel="rules">
                 <div class="rules-shell">
                   <div class="rules-shell-head">
                     <div class="subhead">
-                      <h2>Rule Editor</h2>
+                      <h2>规则</h2>
                       <div class="segmented">
-                        <button class="segment-btn active" type="button" data-rules-mode="fixed">Timed Items</button>
-                        <button class="segment-btn" type="button" data-rules-mode="task">Recurring Tasks</button>
+                        <button class="segment-btn active" type="button" data-rules-mode="fixed">固定</button>
+                        <button class="segment-btn" type="button" data-rules-mode="task">任务</button>
                       </div>
                     </div>
                   </div>
 
                   <div id="rulesFixedPanel" class="rules-panel">
-                    <section class="card rule-list-card">
+                    <section class="rule-list-card">
                       <div class="subhead">
-                        <h2>Timed Items</h2>
-                        <button id="btnNewFixed" class="btn tiny" type="button">New</button>
+                        <h2>固定事项</h2>
+                        <button id="btnNewFixed" class="btn tiny" type="button">新建</button>
                       </div>
                       <div id="fixedList" class="rule-list"></div>
                     </section>
 
-                    <section class="card rule-form-card">
+                    <section class="rule-form-card">
                       <div class="subhead">
-                        <h2 id="fixedEditorTitle">New Timed Item</h2>
-                        <button id="btnDeleteFixed" class="btn tiny danger hidden" type="button">Delete</button>
+                        <h2 id="fixedEditorTitle">新固定事项</h2>
+                        <button id="btnDeleteFixed" class="btn tiny danger hidden" type="button">删除</button>
                       </div>
 
                       <form id="fixedForm" class="stack">
                         <label class="field">
-                          <span>Title</span>
-                          <input id="fixedTitle" class="input" placeholder="e.g. class / commute / meeting" />
+                          <span>标题</span>
+                          <input id="fixedTitle" class="input" placeholder="课程 / 通勤 / 会议" />
                         </label>
 
                         <div class="settings-inline-grid">
                           <label class="field">
-                            <span>Start</span>
+                            <span>开始</span>
                             <input id="fixedStart" class="input time full" type="time" value="09:00" />
                           </label>
                           <label class="field">
-                            <span>End</span>
+                            <span>结束</span>
                             <input id="fixedEnd" class="input time full" type="time" value="10:30" />
                           </label>
                         </div>
 
                         <label class="field">
-                          <span>Buffer Minutes</span>
+                          <span>缓冲分钟</span>
                           <input id="fixedBuffer" class="input small full" type="number" min="0" max="180" value="0" placeholder="buffer min" />
                         </label>
 
                         <div id="fixedRepeatReadonly" class="modal-note hidden"></div>
 
                         <div class="repeat-box">
-                          <div class="repeat-label">Repeat Weekdays (none = every day)</div>
+                          <div class="repeat-label">重复日期</div>
                           <div class="weekday-row">
                             <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="1" /><span>Mon</span></label>
                             <label class="weekday-chip"><input type="checkbox" data-weekday-fixed value="2" /><span>Tue</span></label>
@@ -470,7 +466,7 @@
                         </div>
 
                         <div class="row">
-                          <button id="btnSubmitFixed" class="btn primary" type="submit">Create Timed Item</button>
+                          <button id="btnSubmitFixed" class="btn primary" type="submit">保存</button>
                         </div>
                         <div id="fixedEditorStatus" class="modal-note hidden"></div>
                       </form>
@@ -478,76 +474,76 @@
                   </div>
 
                   <div id="rulesTaskPanel" class="rules-panel hidden">
-                    <section class="card rule-list-card">
+                    <section class="rule-list-card">
                       <div class="subhead">
-                        <h2>Recurring Tasks</h2>
-                        <button id="btnNewTask" class="btn tiny" type="button">New</button>
+                        <h2>重复任务</h2>
+                        <button id="btnNewTask" class="btn tiny" type="button">新建</button>
                       </div>
                       <div id="taskList" class="rule-list"></div>
                     </section>
 
-                    <section class="card rule-form-card">
+                    <section class="rule-form-card">
                       <div class="subhead">
-                        <h2 id="taskEditorTitle">New Task Rule</h2>
-                        <button id="btnDeleteTask" class="btn tiny danger hidden" type="button">Delete</button>
+                        <h2 id="taskEditorTitle">新任务规则</h2>
+                        <button id="btnDeleteTask" class="btn tiny danger hidden" type="button">删除</button>
                       </div>
 
                       <form id="taskForm" class="stack">
                         <label class="field">
-                          <span>Title</span>
-                          <input id="taskTitle" class="input" placeholder="e.g. vocabulary / coding / workout" />
+                          <span>标题</span>
+                          <input id="taskTitle" class="input" placeholder="背单词 / 编程 / 训练" />
                         </label>
 
                         <div class="settings-inline-grid">
                           <label class="field">
-                            <span>Category</span>
+                            <span>类别</span>
                             <select id="taskCategory" class="input select full">
-                              <option value="study">Study</option>
-                              <option value="code">Code</option>
-                              <option value="workout">Workout</option>
-                              <option value="other" selected>Other</option>
+                              <option value="study">学习</option>
+                              <option value="code">编程</option>
+                              <option value="workout">训练</option>
+                              <option value="other" selected>其他</option>
                             </select>
                           </label>
                           <label class="field">
-                            <span>Duration</span>
+                            <span>时长</span>
                             <input id="taskDuration" class="input small full" type="number" min="5" max="480" value="30" />
                           </label>
                         </div>
 
                         <div class="settings-inline-grid">
                           <label class="field">
-                            <span>Energy</span>
+                            <span>精力</span>
                             <select id="taskEnergy" class="input select full">
-                              <option value="high">High</option>
-                              <option value="medium" selected>Medium</option>
-                              <option value="low">Low</option>
+                              <option value="high">高</option>
+                              <option value="medium" selected>中</option>
+                              <option value="low">低</option>
                             </select>
                           </label>
                           <label class="field">
-                            <span>Priority</span>
+                            <span>优先级</span>
                             <select id="taskPriority" class="input select full">
-                              <option value="5">Priority 5</option>
-                              <option value="4">Priority 4</option>
-                              <option value="3" selected>Priority 3</option>
-                              <option value="2">Priority 2</option>
-                              <option value="1">Priority 1</option>
+                              <option value="5">5</option>
+                              <option value="4">4</option>
+                              <option value="3" selected>3</option>
+                              <option value="2">2</option>
+                              <option value="1">1</option>
                             </select>
                           </label>
                         </div>
 
                         <div class="settings-inline-grid">
                           <label class="field">
-                            <span>Weekly Target</span>
+                            <span>每周次数</span>
                             <input id="taskWeeklyTarget" class="input small full" type="number" min="0" max="7" value="0" placeholder="weekly count" title="0 = fixed weekdays; >0 = auto assign per week" />
                           </label>
                           <label class="checkbox settings-checkbox-card">
                             <input id="taskSplit" type="checkbox" />
-                            <span>Allow split</span>
+                            <span>允许拆分</span>
                           </label>
                         </div>
 
                         <div class="repeat-box">
-                          <div class="repeat-label">Weekday Settings (fixed repeat / weekly candidates)</div>
+                          <div class="repeat-label">日期</div>
                           <div class="weekday-row">
                             <label class="weekday-chip"><input type="checkbox" data-weekday-task value="1" /><span>Mon</span></label>
                             <label class="weekday-chip"><input type="checkbox" data-weekday-task value="2" /><span>Tue</span></label>
@@ -560,7 +556,7 @@
                         </div>
 
                         <div class="row">
-                          <button id="btnSubmitTask" class="btn primary" type="submit">Create Task Rule</button>
+                          <button id="btnSubmitTask" class="btn primary" type="submit">保存</button>
                         </div>
                         <div id="taskEditorStatus" class="modal-note hidden"></div>
                       </form>
@@ -569,12 +565,12 @@
                 </div>
               </section>
 
-              <section class="card settings-panel hidden" data-settings-panel="community">
+              <section class="settings-panel hidden" data-settings-panel="community">
                 <div class="subhead">
-                  <h2>Community (Lab)</h2>
+                  <h2>社区</h2>
                   <div class="row">
-                    <button id="btnRefreshCommunity" class="btn secondary" type="button">Refresh</button>
-                    <button id="btnPostReminder" class="btn primary" type="button">Post Current Reminder</button>
+                    <button id="btnRefreshCommunity" class="btn secondary" type="button">刷新</button>
+                    <button id="btnPostReminder" class="btn primary" type="button">发布提醒</button>
                   </div>
                 </div>
                 <div class="settings-panel-body">
@@ -592,8 +588,8 @@
     <div id="eventModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="eventModalTitle">
       <div class="modal-card">
         <div class="subhead">
-          <h3 id="eventModalTitle">Quick Edit</h3>
-          <button id="btnCloseEventModal" class="btn tiny" type="button">Close</button>
+          <h3 id="eventModalTitle">编辑</h3>
+          <button id="btnCloseEventModal" class="btn tiny" type="button">关闭</button>
         </div>
         <div id="eventModalHint" class="modal-note"></div>
         <form id="eventForm" class="stack">
@@ -603,39 +599,39 @@
 
           <div class="modal-grid">
             <label class="field">
-              <span>Title</span>
+              <span>标题</span>
               <input id="eventTitle" class="input" />
             </label>
             <label class="field">
-              <span>Start</span>
+              <span>开始</span>
               <input id="eventStart" class="input time" type="time" />
             </label>
             <label class="field">
-              <span>End</span>
+              <span>结束</span>
               <input id="eventEnd" class="input time" type="time" />
             </label>
 
             <label id="eventCategoryField" class="field">
-              <span>Category</span>
+              <span>类别</span>
               <select id="eventCategory" class="input select">
-                <option value="study">Study</option>
-                <option value="code">Code</option>
-                <option value="workout">Workout</option>
-                <option value="other">Other</option>
+                <option value="study">学习</option>
+                <option value="code">编程</option>
+                <option value="workout">训练</option>
+                <option value="other">其他</option>
               </select>
             </label>
 
             <label id="eventEnergyField" class="field">
-              <span>Energy</span>
+              <span>精力</span>
               <select id="eventEnergy" class="input select">
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
               </select>
             </label>
 
             <label id="eventPriorityField" class="field">
-              <span>Priority</span>
+              <span>优先级</span>
               <select id="eventPriority" class="input select">
                 <option value="5">5</option>
                 <option value="4">4</option>
@@ -646,7 +642,7 @@
             </label>
 
             <label id="eventBufferField" class="field hidden">
-              <span>Buffer Minutes</span>
+              <span>缓冲分钟</span>
               <input id="eventBuffer" class="input small" type="number" min="0" max="180" value="0" />
             </label>
           </div>
@@ -654,10 +650,10 @@
           <div id="eventRecurrenceSection" class="repeat-box hidden">
             <label class="checkbox">
               <input id="eventRecurringEnabled" type="checkbox" />
-              <span>Create as repeating timed item</span>
+              <span>重复事项</span>
             </label>
 
-            <div class="repeat-label">Repeat weekdays</div>
+            <div class="repeat-label">重复日期</div>
             <div class="weekday-row">
               <label class="weekday-chip"><input type="checkbox" data-weekday-event value="1" /><span>Mon</span></label>
               <label class="weekday-chip"><input type="checkbox" data-weekday-event value="2" /><span>Tue</span></label>
@@ -670,34 +666,30 @@
 
             <div class="modal-grid">
               <label class="field">
-                <span>Repeat Mode</span>
+                <span>重复方式</span>
                 <select id="eventRecurrenceMode" class="input select">
-                  <option value="forever">Forever</option>
-                  <option value="count">Repeat N Times</option>
-                  <option value="until">Repeat Until Date</option>
+                  <option value="forever">长期</option>
+                  <option value="count">次数</option>
+                  <option value="until">截止日期</option>
                 </select>
               </label>
 
               <label id="eventRecurrenceCountField" class="field hidden">
-                <span>Occurrences</span>
+                <span>次数</span>
                 <input id="eventRecurrenceCount" class="input small full" type="number" min="1" max="365" value="8" />
               </label>
 
               <label id="eventRecurrenceUntilField" class="field hidden">
-                <span>Until</span>
+                <span>截止</span>
                 <input id="eventRecurrenceUntil" class="input" type="date" />
               </label>
-            </div>
-
-            <div class="modal-note">
-              When enabled, this item writes into timed-item rules and keeps week/day views in sync automatically.
             </div>
           </div>
 
           <div class="modal-actions">
-            <button id="btnDeleteEvent" class="btn danger hidden" type="button">Remove from Day</button>
-            <button id="btnCancelEvent" class="btn secondary" type="button">Cancel</button>
-            <button id="btnSaveEvent" class="btn primary" type="submit">Save</button>
+            <button id="btnDeleteEvent" class="btn danger hidden" type="button">删除</button>
+            <button id="btnCancelEvent" class="btn secondary" type="button">取消</button>
+            <button id="btnSaveEvent" class="btn primary" type="submit">保存</button>
           </div>
         </form>
       </div>
@@ -706,33 +698,29 @@
     <div id="calendarSettingsModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="calendarSettingsTitle">
       <div class="modal-card modal-card-sm">
         <div class="subhead">
-          <h3 id="calendarSettingsTitle">Calendar Settings</h3>
-          <button id="btnCloseCalendarSettings" class="btn tiny" type="button">Close</button>
+          <h3 id="calendarSettingsTitle">日历设置</h3>
+          <button id="btnCloseCalendarSettings" class="btn tiny" type="button">关闭</button>
         </div>
 
         <form id="calendarSettingsForm" class="stack">
           <label class="checkbox">
             <input id="calendarShowBuffers" type="checkbox" />
-            <span>Show buffer blocks for timed items</span>
+            <span>显示缓冲</span>
           </label>
 
           <label class="field">
-            <span>Drag Snap</span>
+            <span>吸附</span>
             <select id="calendarSnapMinutes" class="input select">
-              <option value="5">5 minutes</option>
-              <option value="10">10 minutes</option>
-              <option value="15">15 minutes</option>
-              <option value="30">30 minutes</option>
+              <option value="5">5 分钟</option>
+              <option value="10">10 分钟</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
             </select>
           </label>
 
-          <div class="modal-note">
-            Drag/edit/create for task blocks only affects the currently loaded day. Editing timed items writes back to rules and regenerates day/week.
-          </div>
-
           <div class="modal-actions">
-            <button id="btnCancelCalendarSettings" class="btn secondary" type="button">Cancel</button>
-            <button id="btnSaveCalendarSettings" class="btn primary" type="submit">Save Settings</button>
+            <button id="btnCancelCalendarSettings" class="btn secondary" type="button">取消</button>
+            <button id="btnSaveCalendarSettings" class="btn primary" type="submit">保存</button>
           </div>
         </form>
       </div>
@@ -741,13 +729,14 @@
     <div id="aiApplyModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="aiApplyTitle">
       <div class="modal-card modal-card-sm">
         <div class="subhead">
-          <h3 id="aiApplyTitle">Apply AI Changes?</h3>
-          <button id="btnCloseAiApply" class="btn tiny" type="button">Close</button>
+          <h3 id="aiApplyTitle">应用建议</h3>
+          <button id="btnCloseAiApply" class="btn tiny" type="button">关闭</button>
         </div>
         <div id="aiApplySummary" class="modal-note"></div>
+        <div id="aiApplyDetails" class="modal-detail-list"></div>
         <div class="modal-actions">
-          <button id="btnCancelAiApply" class="btn secondary" type="button">Cancel</button>
-          <button id="btnConfirmAiApply" class="btn primary" type="button">Apply</button>
+          <button id="btnCancelAiApply" class="btn secondary" type="button">取消</button>
+          <button id="btnConfirmAiApply" class="btn primary" type="button">应用</button>
         </div>
       </div>
     </div>
@@ -776,14 +765,14 @@
     <div id="taskScopeModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="taskScopeTitle">
       <div class="modal-card modal-card-sm">
         <div class="subhead">
-          <h3 id="taskScopeTitle">Apply Changes</h3>
+          <h3 id="taskScopeTitle">应用范围</h3>
           <button id="btnCloseTaskScope" class="btn tiny" type="button">X</button>
         </div>
         <div id="taskScopeSummary" class="modal-note"></div>
         <div class="modal-actions modal-actions-triple">
-          <button id="btnTaskScopeSingle" class="btn secondary" type="button">Only This Day</button>
-          <button id="btnTaskScopeFollowing" class="btn secondary" type="button">This Date And Later</button>
-          <button id="btnTaskScopeAll" class="btn primary" type="button">All Repeating Items</button>
+          <button id="btnTaskScopeSingle" class="btn secondary" type="button">仅当天</button>
+          <button id="btnTaskScopeFollowing" class="btn secondary" type="button">当天及以后</button>
+          <button id="btnTaskScopeAll" class="btn primary" type="button">全部重复项</button>
         </div>
       </div>
     </div>

@@ -10,6 +10,7 @@ const {
   PlannerInputError,
   ScheduleValidationError,
 } = require("./scheduleEngine");
+const { previewScheduleActions, applyScheduleActions } = require("./scheduleActionService");
 const { generateSleepReminder } = require("./reminderEngine");
 const { CommunityStore } = require("./communityStore");
 const { generateChatReply, generateChatReplyStream, AIConfigError } = require("./aiClient");
@@ -54,6 +55,14 @@ loadEnvFile();
 
 const communityStore = new CommunityStore(path.join(DATA_DIR, "community.json"));
 
+class RequestBodyError extends Error {
+  constructor(message, statusCode = 400) {
+    super(message);
+    this.name = "RequestBodyError";
+    this.statusCode = statusCode;
+  }
+}
+
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body, null, 2);
   res.writeHead(statusCode, {
@@ -80,26 +89,53 @@ async function readJsonBody(req, { maxBytes = 1024 * 1024 } = {}) {
   return new Promise((resolve, reject) => {
     let raw = "";
     let size = 0;
+    let settled = false;
+
+    const rejectOnce = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    const resolveOnce = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
 
     req.on("data", (chunk) => {
+      if (settled) return;
+
       size += chunk.length;
       if (size > maxBytes) {
-        reject(new Error("Request body too large"));
+        rejectOnce(new RequestBodyError("Request body too large", 413));
         return;
       }
       raw += chunk.toString("utf8");
     });
 
     req.on("end", () => {
+      if (settled) return;
+
       if (!raw.trim()) {
-        resolve({});
+        resolveOnce({});
         return;
       }
 
-      resolve(JSON.parse(raw));
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+          rejectOnce(new RequestBodyError("Request body must be a JSON object"));
+          return;
+        }
+
+        resolveOnce(parsed);
+      } catch {
+        rejectOnce(new RequestBodyError("Request body must be valid JSON"));
+      }
     });
 
-    req.on("error", reject);
+    req.on("error", rejectOnce);
   });
 }
 
@@ -125,12 +161,35 @@ function contentTypeFor(filePath) {
   }
 }
 
-async function serveStatic(res, urlPath) {
+function isPathInside(parentDir, candidatePath) {
+  const relative = path.relative(parentDir, candidatePath);
+  return relative === "" || (relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function resolveStaticPath(urlPath) {
   const safePath = urlPath === "/" ? "/index.html" : urlPath;
   const decoded = decodeURIComponent(safePath);
-  const resolved = path.normalize(path.join(PUBLIC_DIR, decoded));
+  const publicRoot = path.resolve(PUBLIC_DIR);
+  const relativePath = decoded.replace(/^[/\\]+/, "");
+  const resolved = path.resolve(publicRoot, relativePath);
 
-  if (!resolved.startsWith(PUBLIC_DIR)) {
+  if (!isPathInside(publicRoot, resolved)) {
+    return null;
+  }
+
+  return resolved;
+}
+
+async function serveStatic(res, urlPath) {
+  let resolved = null;
+  try {
+    resolved = resolveStaticPath(urlPath);
+  } catch {
+    sendText(res, 400, "Bad Request");
+    return;
+  }
+
+  if (!resolved) {
     sendText(res, 403, "Forbidden");
     return;
   }
@@ -162,6 +221,10 @@ function badRequest(res, message) {
 
 function isIsoDate(value) {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function hasUsableMessages(messages) {
+  return Array.isArray(messages) && messages.some((item) => String(item?.content || "").trim().length > 0);
 }
 
 async function ensureDataDir() {
@@ -219,8 +282,27 @@ function createAppServer() {
         return;
       }
 
+      if (method === "POST" && url.pathname === "/api/schedule-actions/preview") {
+        const body = await readJsonBody(req, { maxBytes: 256 * 1024 });
+        const result = previewScheduleActions(body);
+        sendJson(res, 200, { ok: true, result });
+        return;
+      }
+
+      if (method === "POST" && url.pathname === "/api/schedule-actions/apply") {
+        const body = await readJsonBody(req, { maxBytes: 256 * 1024 });
+        const result = applyScheduleActions(body);
+        sendJson(res, 200, { ok: true, result });
+        return;
+      }
+
       if (method === "POST" && url.pathname === "/api/chat") {
         const body = await readJsonBody(req, { maxBytes: 128 * 1024 });
+        if (!hasUsableMessages(body.messages)) {
+          badRequest(res, "messages is required");
+          return;
+        }
+
         const result = await generateChatReply({
           messages: body.messages,
           context: body.context || {},
@@ -240,6 +322,11 @@ function createAppServer() {
 
       if (method === "POST" && url.pathname === "/api/chat/stream") {
         const body = await readJsonBody(req, { maxBytes: 128 * 1024 });
+        if (!hasUsableMessages(body.messages)) {
+          badRequest(res, "messages is required");
+          return;
+        }
+
         res.writeHead(200, {
           "Content-Type": "text/event-stream; charset=utf-8",
           "Cache-Control": "no-store",
@@ -346,6 +433,11 @@ function createAppServer() {
         return;
       }
 
+      if (error instanceof RequestBodyError) {
+        sendJson(res, error.statusCode || 400, { ok: false, error: error.message });
+        return;
+      }
+
       if (error instanceof AIConfigError) {
         sendJson(res, 400, { ok: false, error: error.message });
         return;
@@ -358,7 +450,11 @@ function createAppServer() {
 
 async function startServer(options = {}) {
   const requestedPort = Number.parseInt(String(options.port ?? process.env.PORT ?? "3000"), 10);
-  const host = options.host || process.env.HOST || undefined;
+  const configuredHost = options.host ?? process.env.HOST;
+  const host =
+    configuredHost == null || String(configuredHost).trim() === ""
+      ? "127.0.0.1"
+      : String(configuredHost).trim();
   const port = Number.isFinite(requestedPort) ? requestedPort : 3000;
 
   await ensureDataDir();
@@ -401,12 +497,7 @@ async function startServer(options = {}) {
     server.once("error", handleError);
     server.once("listening", handleListening);
 
-    if (host) {
-      server.listen(port, host);
-      return;
-    }
-
-    server.listen(port);
+    server.listen(port, host);
   });
 }
 
