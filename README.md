@@ -5,7 +5,7 @@ Local web MVP for schedule planning with fixed constraints, recurring tasks, wee
 ## Run
 
 ```powershell
-cd D:\Programming\ai-schedule-planner
+cd ~\ai-schedule-planner
 node .\server\index.js
 ```
 
