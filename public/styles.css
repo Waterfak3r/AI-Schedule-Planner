@@ -47,12 +47,8 @@ body {
 .desktop-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 76px minmax(0, 1fr);
   transition: grid-template-columns 0.18s ease;
-}
-
-.desktop-shell.sidebar-collapsed {
-  grid-template-columns: 112px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -60,7 +56,7 @@ body {
   background:
     linear-gradient(180deg, rgba(6, 10, 24, 0.96), rgba(11, 16, 32, 0.9)),
     radial-gradient(circle at top, rgba(124, 92, 255, 0.18), transparent 42%);
-  padding: 22px 18px 18px;
+  padding: 18px 10px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -74,10 +70,9 @@ body {
 }
 
 .sidebar-brand-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .sidebar-note {
@@ -97,12 +92,12 @@ body {
 
 .nav-button {
   width: 100%;
-  padding: 14px 14px 15px;
+  padding: 10px 8px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   display: grid;
   gap: 4px;
@@ -120,47 +115,6 @@ body {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 
-.desktop-shell.sidebar-collapsed .sidebar {
-  padding-left: 12px;
-  padding-right: 12px;
-}
-
-.desktop-shell.sidebar-collapsed .sidebar-top {
-  gap: 12px;
-}
-
-.desktop-shell.sidebar-collapsed .sidebar-brand-row {
-  grid-template-columns: 1fr;
-  justify-items: center;
-}
-
-.desktop-shell.sidebar-collapsed .sidebar-note,
-.desktop-shell.sidebar-collapsed .brand-text,
-.desktop-shell.sidebar-collapsed .nav-kicker,
-.desktop-shell.sidebar-collapsed .nav-subtitle {
-  display: none;
-}
-
-.desktop-shell.sidebar-collapsed .brand {
-  min-width: 0;
-  justify-content: center;
-}
-
-.desktop-shell.sidebar-collapsed .sidebar-collapse-button {
-  justify-self: center;
-}
-
-.desktop-shell.sidebar-collapsed .nav-button {
-  justify-items: center;
-  text-align: center;
-  padding-left: 10px;
-  padding-right: 10px;
-}
-
-.desktop-shell.sidebar-collapsed .nav-title {
-  font-size: 14px;
-}
-
 .nav-kicker {
   color: rgba(255, 255, 255, 0.45);
   font-size: 11px;
@@ -169,7 +123,7 @@ body {
 }
 
 .nav-title {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -475,10 +429,6 @@ body {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.1);
-}
-
-.sidebar-collapse-button {
-  margin-top: 4px;
 }
 
 .schedule-mini-calendar-card {
@@ -917,18 +867,6 @@ body {
   align-items: center;
   gap: 12px;
   min-width: 0;
-}
-
-.logo {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  font-weight: 800;
-  letter-spacing: 0.5px;
-  background: linear-gradient(135deg, rgba(124, 92, 255, 0.95), rgba(49, 208, 170, 0.9));
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
 }
 
 .title {
@@ -1431,6 +1369,14 @@ select optgroup {
 
 .calendar-event.drag-warning {
   box-shadow: 0 0 0 2px rgba(255, 196, 87, 0.72), 0 16px 30px rgba(15, 23, 42, 0.24);
+}
+
+.calendar-event.selected,
+.week-preview-event.selected,
+.week-lane-event.selected {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.18), 0 12px 24px rgba(15, 23, 42, 0.18);
 }
 
 .calendar-event.ai-focus {
@@ -2360,6 +2306,15 @@ select optgroup {
   color: #ffd2dc;
 }
 
+.schedule-selection-box {
+  position: fixed;
+  z-index: 2000;
+  border: 1px solid #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.16);
+  pointer-events: none;
+}
+
 .chat-messages {
   max-height: 320px;
   min-height: 220px;
@@ -2897,18 +2852,14 @@ body {
 }
 
 .desktop-shell {
-  grid-template-columns: 220px minmax(0, 1fr);
-  background: var(--bg);
-}
-
-.desktop-shell.sidebar-collapsed {
   grid-template-columns: 76px minmax(0, 1fr);
+  background: var(--bg);
 }
 
 .sidebar {
   min-height: 100vh;
-  padding: 18px 14px;
-  gap: 18px;
+  padding: 18px 10px;
+  gap: 14px;
   border-right: 1px solid var(--line);
   background: var(--surface);
   color: var(--text);
@@ -2919,22 +2870,13 @@ body {
 }
 
 .sidebar-brand-row {
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
+  justify-content: center;
   align-items: center;
 }
 
 .brand {
   gap: 10px;
-}
-
-.logo {
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  background: #111827;
-  color: #fff;
-  box-shadow: none;
-  font-size: 12px;
 }
 
 .title {
@@ -2965,7 +2907,7 @@ body {
   border-radius: 6px;
   background: transparent;
   color: var(--text);
-  padding: 10px 12px;
+  padding: 10px 8px;
   min-height: 42px;
   box-shadow: none;
   gap: 0;
@@ -2993,15 +2935,12 @@ body {
   font-weight: 700;
 }
 
-.desktop-shell.sidebar-collapsed .sidebar {
-  padding-left: 10px;
-  padding-right: 10px;
+.sidebar .nav-title {
+  text-align: center;
 }
 
-.desktop-shell.sidebar-collapsed .nav-button {
-  justify-items: center;
-  padding-left: 8px;
-  padding-right: 8px;
+.settings-nav-button {
+  padding: 10px 12px;
 }
 
 .workspace {
@@ -3098,10 +3037,6 @@ select {
 .icon-button {
   width: 36px;
   height: 36px;
-}
-
-.sidebar-collapse-button {
-  margin-top: 0;
 }
 
 .theme-toggle-button.active {
@@ -3672,11 +3607,6 @@ html[data-theme="dark"] {
   --calendar-text: #e5e7eb;
 }
 
-html[data-theme="dark"] .logo {
-  background: #e5e7eb;
-  color: #0b0f16;
-}
-
 html[data-theme="dark"] .nav-button.active,
 html[data-theme="dark"] .settings-nav-button.active {
   background: #14213d;
@@ -3932,8 +3862,7 @@ html[data-theme="dark"] .schedule-undo-card {
 }
 
 @media (max-width: 1180px) {
-  .desktop-shell,
-  .desktop-shell.sidebar-collapsed {
+  .desktop-shell {
     grid-template-columns: 1fr;
   }
 

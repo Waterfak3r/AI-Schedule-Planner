@@ -9,6 +9,7 @@ node_modules/
 # Build output
 release/
 deliverables/exe/
+ai-schedule-planner-upload-ready/
 
 # Runtime state and local data
 *.db

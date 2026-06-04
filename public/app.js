@@ -21,7 +21,6 @@ const NEW_TASK_DRAFT_ID = "__new_task__";
 const DEFAULT_WORKSPACE_PREFS = {
   defaultStartupView: "chat",
   defaultScheduleMode: "week",
-  navCollapsed: false,
   theme: "light",
 };
 const DEFAULT_PLANNER_PREFS = {
@@ -36,9 +35,7 @@ const DEFAULT_SCHEDULE_VIEW_PREFS = {
   dayZoom: 1,
   weekZoom: 1,
   scheduleSidebarCollapsed: false,
-  plannerPanelCollapsed: false,
   calendarPanelCollapsed: false,
-  optionsPanelCollapsed: false,
 };
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const WEEKDAY_META = {
@@ -52,16 +49,6 @@ const WEEKDAY_META = {
 };
 const SCHEDULE_SIDEBAR_SECTIONS = [
   {
-    key: "plannerPanelCollapsed",
-    cardId: "scheduleSectionPlanner",
-    bodyId: "scheduleSectionPlannerBody",
-    buttonId: "btnToggleScheduleSectionPlanner",
-    collapsedText: "+",
-    expandedText: "-",
-    collapsedTitle: "展开规划",
-    expandedTitle: "收起规划",
-  },
-  {
     key: "calendarPanelCollapsed",
     cardId: "scheduleSectionCalendar",
     bodyId: "scheduleSectionCalendarBody",
@@ -70,16 +57,6 @@ const SCHEDULE_SIDEBAR_SECTIONS = [
     expandedText: "-",
     collapsedTitle: "展开日历",
     expandedTitle: "收起日历",
-  },
-  {
-    key: "optionsPanelCollapsed",
-    cardId: "scheduleSectionOptions",
-    bodyId: "scheduleSectionOptionsBody",
-    buttonId: "btnToggleScheduleSectionOptions",
-    collapsedText: "+",
-    expandedText: "-",
-    collapsedTitle: "展开选项",
-    expandedTitle: "收起选项",
   },
 ];
 let scheduleHydrationPromise = null;
@@ -162,6 +139,8 @@ const state = {
   lastWeekPlan: null,
   ui: {
     drag: null,
+    selectionDrag: null,
+    selectedScheduleBlocks: [],
     editor: null,
     chatSending: false,
     pendingAiProposal: null,
@@ -201,12 +180,10 @@ function normalizeWorkspacePrefs(value) {
   const defaultScheduleMode = ["day", "week"].includes(raw.defaultScheduleMode)
     ? raw.defaultScheduleMode
     : DEFAULT_WORKSPACE_PREFS.defaultScheduleMode;
-  const navCollapsed = Boolean(raw.navCollapsed);
   const theme = raw.theme === "dark" ? "dark" : DEFAULT_WORKSPACE_PREFS.theme;
   return {
     defaultStartupView,
     defaultScheduleMode,
-    navCollapsed,
     theme,
   };
 }
@@ -245,9 +222,7 @@ function normalizeScheduleViewPrefs(value) {
     dayZoom: clampNumber(raw.dayZoom, DEFAULT_SCHEDULE_VIEW_PREFS.dayZoom, 0.75, 2.4),
     weekZoom: clampNumber(raw.weekZoom, DEFAULT_SCHEDULE_VIEW_PREFS.weekZoom, 0.7, 2.6),
     scheduleSidebarCollapsed: Boolean(raw.scheduleSidebarCollapsed),
-    plannerPanelCollapsed: Boolean(raw.plannerPanelCollapsed),
     calendarPanelCollapsed: Boolean(raw.calendarPanelCollapsed),
-    optionsPanelCollapsed: Boolean(raw.optionsPanelCollapsed),
   };
 }
 
@@ -256,19 +231,10 @@ function persistScheduleViewPrefs() {
 }
 
 function renderShellChrome() {
-  const navCollapsed = Boolean(state.workspacePrefs.navCollapsed);
   const scheduleSidebarCollapsed = Boolean(state.scheduleViewPrefs.scheduleSidebarCollapsed);
 
-  $("desktopShell")?.classList.toggle("sidebar-collapsed", navCollapsed);
+  $("desktopShell")?.classList.remove("sidebar-collapsed");
   $("scheduleShell")?.classList.toggle("sidebar-collapsed", scheduleSidebarCollapsed);
-
-  const navButton = $("btnSidebarCollapse");
-  if (navButton) {
-    navButton.textContent = navCollapsed ? ">" : "<";
-    navButton.title = navCollapsed ? "展开导航" : "收起导航";
-    navButton.setAttribute("aria-label", navButton.title);
-    navButton.setAttribute("aria-expanded", String(!navCollapsed));
-  }
 
   const scheduleButton = $("btnScheduleSidebarCollapse");
   if (scheduleButton) {
@@ -290,12 +256,6 @@ function renderShellChrome() {
     button.setAttribute("aria-label", button.title);
     button.setAttribute("aria-expanded", String(!collapsed));
   });
-}
-
-function setNavCollapsed(nextCollapsed) {
-  state.workspacePrefs.navCollapsed = Boolean(nextCollapsed);
-  persistWorkspacePrefs();
-  renderShellChrome();
 }
 
 function setScheduleSidebarCollapsed(nextCollapsed) {
@@ -330,16 +290,24 @@ function normalizePlannerPrefs(value) {
 function applyPlannerPrefsToForm() {
   const prefs = state.plannerPrefs || DEFAULT_PLANNER_PREFS;
   $("planDate").value = prefs.planDate || todayInputValue();
-  $("wakeTime").value = prefs.wakeTime || DEFAULT_PLANNER_PREFS.wakeTime;
-  $("bedtime").value = prefs.bedtime || DEFAULT_PLANNER_PREFS.bedtime;
+  if ($("wakeTime")) $("wakeTime").value = prefs.wakeTime || DEFAULT_PLANNER_PREFS.wakeTime;
+  if ($("bedtime")) $("bedtime").value = prefs.bedtime || DEFAULT_PLANNER_PREFS.bedtime;
   $("tone").value = prefs.tone || DEFAULT_PLANNER_PREFS.tone;
+}
+
+function getPlannerWakeTime() {
+  return $("wakeTime")?.value || state.plannerPrefs?.wakeTime || DEFAULT_PLANNER_PREFS.wakeTime;
+}
+
+function getPlannerBedtime() {
+  return $("bedtime")?.value || state.plannerPrefs?.bedtime || DEFAULT_PLANNER_PREFS.bedtime;
 }
 
 function persistPlannerPrefsFromForm() {
   state.plannerPrefs = normalizePlannerPrefs({
     planDate: $("planDate")?.value || todayInputValue(),
-    wakeTime: $("wakeTime")?.value || DEFAULT_PLANNER_PREFS.wakeTime,
-    bedtime: $("bedtime")?.value || DEFAULT_PLANNER_PREFS.bedtime,
+    wakeTime: getPlannerWakeTime(),
+    bedtime: getPlannerBedtime(),
     tone: $("tone")?.value || DEFAULT_PLANNER_PREFS.tone,
   });
   storage.save("asp.plannerPrefs", state.plannerPrefs);
@@ -1838,6 +1806,45 @@ function eventClassName(block) {
   return block.type;
 }
 
+function scheduleSelectionKey(surface, date, runtimeId) {
+  if (!runtimeId) return "";
+  return `${surface || "day"}:${date || ""}:${runtimeId}`;
+}
+
+function isScheduleBlockSelected(surface, date, runtimeId) {
+  const key = scheduleSelectionKey(surface, date, runtimeId);
+  return key ? state.ui.selectedScheduleBlocks.includes(key) : false;
+}
+
+function setSelectedScheduleBlocks(keys) {
+  state.ui.selectedScheduleBlocks = [...new Set(keys.filter(Boolean))];
+  updateScheduleSelectionDom();
+}
+
+function getScheduleSelectableElements(root = document) {
+  return Array.from(
+    root.querySelectorAll(
+      ".calendar-event[data-runtime-id]:not(.buffer), .week-preview-event[data-runtime-id]:not(.buffer), .week-lane-event[data-runtime-id]:not(.buffer)"
+    )
+  ).filter((item) => item instanceof HTMLElement);
+}
+
+function selectionKeyFromElement(element) {
+  const runtimeId = element.dataset.runtimeId || "";
+  if (!runtimeId) return "";
+  if (element.classList.contains("week-preview-event") || element.classList.contains("week-lane-event")) {
+    return scheduleSelectionKey("week", element.dataset.weekDate || "", runtimeId);
+  }
+  return scheduleSelectionKey("day", state.lastSchedule?.date || $("planDate")?.value || todayInputValue(), runtimeId);
+}
+
+function updateScheduleSelectionDom(root = document) {
+  const selected = new Set(state.ui.selectedScheduleBlocks);
+  getScheduleSelectableElements(root).forEach((element) => {
+    element.classList.toggle("selected", selected.has(selectionKeyFromElement(element)));
+  });
+}
+
 function renderSchedule(schedule, options = {}) {
   const { scrollToFirstBlock = false, scrollToRuntimeId = null } = options;
   syncCalendarToolbar();
@@ -1907,9 +1914,10 @@ function renderSchedule(schedule, options = {}) {
       state.ui.aiFocus.runtimeIds.includes(block.runtimeId);
 
     const el = document.createElement("article");
+    const isSelected = isScheduleBlockSelected("day", displaySchedule.date, block.runtimeId);
     el.className = `calendar-event ${eventClassName(block)}${blockHeight < 72 ? " compact" : ""}${
       isAiFocused ? " ai-focus" : ""
-    }`;
+    }${isSelected ? " selected" : ""}`;
     el.dataset.runtimeId = block.runtimeId;
     el.dataset.blockType = block.type;
     el.dataset.editable = block.editable ? "1" : "0";
@@ -2062,8 +2070,8 @@ function buildChatContext() {
 
   return {
     planDate: $("planDate").value || todayInputValue(),
-    wakeTime: $("wakeTime").value || "07:30",
-    bedtime: $("bedtime").value || "23:30",
+    wakeTime: getPlannerWakeTime(),
+    bedtime: getPlannerBedtime(),
     tone: $("tone")?.value || DEFAULT_PLANNER_PREFS.tone,
     hasSchedule: Boolean(schedule),
     scheduleSummary: schedule
@@ -2468,7 +2476,6 @@ function hookWorkspaceChrome() {
   $("darkModeEnabled")?.addEventListener("change", () =>
     setWorkspaceTheme($("darkModeEnabled")?.checked ? "dark" : "light")
   );
-  $("btnSidebarCollapse")?.addEventListener("click", () => setNavCollapsed(!state.workspacePrefs.navCollapsed));
   $("btnScheduleSidebarCollapse")?.addEventListener("click", () =>
     setScheduleSidebarCollapsed(!state.scheduleViewPrefs.scheduleSidebarCollapsed)
   );
@@ -3196,8 +3203,8 @@ function hasWeeklyTargetTasks() {
 }
 
 function buildRuleFingerprintPayload() {
-  const activeStart = $("wakeTime").value || "07:30";
-  const activeEnd = $("bedtime").value || "23:30";
+  const activeStart = getPlannerWakeTime();
+  const activeEnd = getPlannerBedtime();
 
   return {
     dayStart: FULL_DAY_START,
@@ -3626,8 +3633,8 @@ async function createFixedRule(rule, options = {}) {
 
 function buildBasePlannerPayload() {
   const planDate = $("planDate").value || todayInputValue();
-  const activeStart = $("wakeTime").value || "07:30";
-  const activeEnd = $("bedtime").value || "23:30";
+  const activeStart = getPlannerWakeTime();
+  const activeEnd = getPlannerBedtime();
 
   return {
     date: planDate,
@@ -3872,8 +3879,8 @@ async function generateReminder() {
 
   const res = await api("/api/reminder", {
     tone: $("tone").value || "snarky",
-    wakeTime: $("wakeTime").value || "07:30",
-    bedtime: $("bedtime").value || "23:30",
+    wakeTime: getPlannerWakeTime(),
+    bedtime: getPlannerBedtime(),
     stats: computeCompletionStats(state.lastSchedule),
   });
 
@@ -4398,17 +4405,6 @@ function initForms() {
 }
 
 function hookActionButtons() {
-  $("btnQuickStart").addEventListener("click", () => quickStart());
-  $("btnGenerate").addEventListener("click", () => {
-    setScheduleMode("day");
-    generateSchedule().catch((error) => {
-      if (!Array.isArray(error.details) || error.details.length === 0) {
-        alert(error.message);
-      } else {
-        renderScheduleIssues(error.details);
-      }
-    });
-  });
   $("btnReminder").addEventListener("click", () => generateReminder().catch((error) => alert(error.message)));
   $("btnCopyReminder").addEventListener("click", () => copyReminder());
   $("btnShare").addEventListener("click", () => drawShareCard());
@@ -4426,7 +4422,7 @@ function hookActionButtons() {
 
 function hookBaseInputChanges() {
   ["planDate", "wakeTime", "bedtime"].forEach((id) => {
-    $(id).addEventListener("change", async () => {
+    $(id)?.addEventListener("change", async () => {
       persistPlannerPrefsFromForm();
       if (id === "planDate") {
         syncScheduleMonthCursorToDate($("planDate").value || todayInputValue());
@@ -4520,12 +4516,22 @@ function openWeekBlockContextMenu(date, runtimeId, x, y) {
   const block = findWeekBlock(date, runtimeId);
   if (!block) return;
 
+  const selectionKeys = getContextSelectionKeys("week", date, runtimeId);
   const items = [];
+  if (selectionKeys.length > 1) {
+    items.push({ action: "delete-selected-schedule", label: `删除选中日程（${selectionKeys.length}）`, date, surface: "week", danger: true });
+    items.push({ action: "load-week-day", label: "打开当日日程", date, surface: "week" });
+    items.push({ action: "open-settings", label: "日历设置" });
+    openContextMenu({ x, y, items });
+    return;
+  }
+
   if (block.type === "task") {
     items.push({ action: "edit-event", label: "快速编辑", runtimeId, date, surface: "week" });
-    items.push({ action: "delete-task", label: "删除任务", runtimeId, date, surface: "week", danger: true });
+    items.push({ action: "delete-schedule-block", label: "删除任务", runtimeId, date, surface: "week", danger: true });
   } else if (block.type === "fixed") {
     items.push({ action: "edit-event", label: "编辑定时事项", runtimeId, date, surface: "week" });
+    items.push({ action: "delete-schedule-block", label: "移出这一天", runtimeId, date, surface: "week", danger: true });
   }
 
   items.push({ action: "load-week-day", label: "打开当日日程", date, surface: "week" });
@@ -4852,6 +4858,103 @@ function showDragHint(message, level, x, y) {
   el.style.top = `${Math.max(10, Math.min(y + offsetY, maxTop))}px`;
 }
 
+function ensureSelectionBoxElement() {
+  let el = $("scheduleSelectionBox");
+  if (el) return el;
+
+  el = document.createElement("div");
+  el.id = "scheduleSelectionBox";
+  el.className = "schedule-selection-box hidden";
+  document.body.appendChild(el);
+  return el;
+}
+
+function hideSelectionBox() {
+  const el = $("scheduleSelectionBox");
+  if (!el) return;
+  el.classList.add("hidden");
+}
+
+function rectsIntersect(a, b) {
+  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
+}
+
+function selectionRectFromDrag(selection, clientX, clientY) {
+  const left = Math.min(selection.startX, clientX);
+  const top = Math.min(selection.startY, clientY);
+  const right = Math.max(selection.startX, clientX);
+  const bottom = Math.max(selection.startY, clientY);
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function updateSelectionBox(selection, rect) {
+  const el = ensureSelectionBoxElement();
+  el.classList.toggle("hidden", rect.width < 4 && rect.height < 4);
+  el.style.left = `${rect.left}px`;
+  el.style.top = `${rect.top}px`;
+  el.style.width = `${rect.width}px`;
+  el.style.height = `${rect.height}px`;
+}
+
+function updateScheduleSelectionFromRect(selection, rect) {
+  const keys = [];
+  getScheduleSelectableElements(selection.root).forEach((element) => {
+    if (rectsIntersect(rect, element.getBoundingClientRect())) {
+      keys.push(selectionKeyFromElement(element));
+    }
+  });
+  setSelectedScheduleBlocks(keys);
+}
+
+function beginScheduleSelection(event, config) {
+  const root = config.root;
+  if (!(root instanceof HTMLElement)) return;
+
+  state.ui.selectionDrag = {
+    pointerId: event.pointerId,
+    root,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+  };
+
+  setSelectedScheduleBlocks([]);
+  updateSelectionBox(state.ui.selectionDrag, selectionRectFromDrag(state.ui.selectionDrag, event.clientX, event.clientY));
+  root.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+
+function handleScheduleSelectionMove(event) {
+  const selection = state.ui.selectionDrag;
+  if (!selection || event.pointerId !== selection.pointerId) return;
+
+  const rect = selectionRectFromDrag(selection, event.clientX, event.clientY);
+  selection.moved = rect.width >= 4 || rect.height >= 4;
+  updateSelectionBox(selection, rect);
+  updateScheduleSelectionFromRect(selection, rect);
+}
+
+function finishScheduleSelection(event) {
+  const selection = state.ui.selectionDrag;
+  if (!selection || event.pointerId !== selection.pointerId) return;
+
+  const rect = selectionRectFromDrag(selection, event.clientX, event.clientY);
+  state.ui.selectionDrag = null;
+  hideSelectionBox();
+  selection.root.releasePointerCapture?.(event.pointerId);
+
+  if (selection.moved) {
+    updateScheduleSelectionFromRect(selection, rect);
+  }
+}
+
 function getScheduleForDragSurface(drag) {
   if (drag.surface === "week") {
     return findWeekDayEntry(drag.date)?.result || null;
@@ -4887,6 +4990,187 @@ function computeDragValidation(drag) {
     endMin: drag.previewEndMin,
   };
   return computePlacementValidation(schedule, preview, selfBlock.runtimeId);
+}
+
+function getSelectedDragGroup(config) {
+  if (config.mode !== "move") return [];
+
+  const date = config.surface === "week" ? config.date : state.lastSchedule?.date || $("planDate").value || todayInputValue();
+  const currentKey = scheduleSelectionKey(config.surface, date, config.runtimeId);
+  if (!state.ui.selectedScheduleBlocks.includes(currentKey)) return [];
+
+  return state.ui.selectedScheduleBlocks
+    .map((key) => {
+      const [surface, itemDate, runtimeId] = key.split(":");
+      if (surface !== config.surface || itemDate !== date || !runtimeId) return null;
+      const block = surface === "week" ? findWeekBlock(itemDate, runtimeId) : findBlock(runtimeId);
+      if (!block || block.type === "buffer" || !block.editable) return null;
+      const element = getScheduleSelectableElements(config.root).find((candidate) => {
+        if (candidate.dataset.runtimeId !== runtimeId) return false;
+        if (surface === "week") return candidate.dataset.weekDate === itemDate;
+        return candidate.classList.contains("calendar-event");
+      });
+      if (!(element instanceof HTMLElement)) return null;
+      return {
+        surface,
+        date: itemDate,
+        runtimeId,
+        block,
+        element,
+        timeEl:
+          surface === "week" ? element.querySelector(".week-preview-time") : element.querySelector("[data-role='time']"),
+        originalStartMin: block.startMin,
+        originalEndMin: block.endMin,
+      };
+    })
+    .filter(Boolean);
+}
+
+function computeGroupDragValidation(drag) {
+  const schedule = getScheduleForDragSurface(drag);
+  if (!schedule || !Array.isArray(drag.groupItems) || drag.groupItems.length <= 1) {
+    return computeDragValidation(drag);
+  }
+
+  const groupIds = new Set(drag.groupItems.map((item) => item.runtimeId));
+  const issues = [];
+  const deltaMin = drag.previewStartMin - drag.originalStartMin;
+
+  for (const item of drag.groupItems) {
+    const block = item.surface === "week" ? findWeekBlock(item.date, item.runtimeId) : findBlock(item.runtimeId);
+    if (!block) {
+      issues.push({ level: "error", message: "选中的日程已不存在" });
+      continue;
+    }
+
+    const candidate = {
+      ...block,
+      startMin: item.originalStartMin + deltaMin,
+      endMin: item.originalEndMin + deltaMin,
+    };
+
+    if (candidate.endMin <= candidate.startMin) {
+      issues.push({ level: "error", message: "结束时间必须晚于开始时间" });
+      continue;
+    }
+
+    if (candidate.startMin < schedule.dayStartMin || candidate.endMin > schedule.dayEndMin) {
+      issues.push({
+        level: "warn",
+        message: `超出当日日程范围 ${minutesToTime(schedule.dayStartMin)}-${minutesToTime(schedule.dayEndMin)}`,
+      });
+    }
+
+    const others = (schedule.blocks || []).filter((other) => {
+      if (groupIds.has(other.runtimeId)) return false;
+      if (candidate.type === "fixed" && other.type === "buffer" && candidate.id && other.sourceId === candidate.id) {
+        return false;
+      }
+      return true;
+    });
+
+    for (const other of others) {
+      if (!overlaps(candidate, other)) continue;
+      const involvesBuffer = other.type === "buffer" || candidate.type === "buffer";
+      issues.push({
+        level: involvesBuffer ? "warn" : "error",
+        message: involvesBuffer
+          ? `与 ${getBlockDisplayTitle(other)} 的缓冲区重叠`
+          : `与 ${getBlockDisplayTitle(other)} 时间重叠`,
+      });
+    }
+  }
+
+  return summarizePlacementValidation(issues);
+}
+
+function applyGroupDragPreview(drag) {
+  if (!Array.isArray(drag.groupItems) || drag.groupItems.length <= 1) return;
+
+  const deltaMin = drag.previewStartMin - drag.originalStartMin;
+  for (const item of drag.groupItems) {
+    const nextStart = item.originalStartMin + deltaMin;
+    const nextEnd = item.originalEndMin + deltaMin;
+    const top = drag.offsetTopPx + (nextStart - drag.rangeStartMin) * drag.pixelsPerMinute;
+    const height = Math.max(drag.minVisualHeight, (nextEnd - nextStart) * drag.pixelsPerMinute);
+    item.element.style.top = `${top}px`;
+    item.element.style.height = `${height}px`;
+    item.element.classList.add("dragging");
+    item.element.classList.toggle("compact", height < (drag.surface === "week" ? 52 : 72));
+    item.element.classList.toggle("drag-invalid", drag.validation.level === "error");
+    item.element.classList.toggle("drag-warning", drag.validation.level === "warn");
+    item.element.classList.toggle("drag-ok", drag.validation.level === "ok");
+    if (item.timeEl) {
+      item.timeEl.textContent = `${minutesToTime(nextStart)} - ${minutesToTime(nextEnd)}`;
+    }
+  }
+}
+
+function commitGroupDrag(drag) {
+  if (!Array.isArray(drag.groupItems) || drag.groupItems.length <= 1) return false;
+
+  const undoSnapshot = captureScheduleUndoSnapshot();
+  const deltaMin = drag.previewStartMin - drag.originalStartMin;
+  const changedDate = drag.date || state.lastSchedule?.date || $("planDate").value || todayInputValue();
+
+  if (drag.surface === "week") {
+    ensureEditableWeekPlan();
+    const dayEntry = findWeekDayEntry(changedDate);
+    if (!dayEntry?.ok) throw new Error("这一天当前不可编辑");
+
+    for (const item of drag.groupItems) {
+      const block = findWeekBlock(changedDate, item.runtimeId);
+      if (!block) continue;
+      const payload = {
+        title: block.title,
+        startMin: item.originalStartMin + deltaMin,
+        endMin: item.originalEndMin + deltaMin,
+        bufferMin: block.bufferMin,
+        category: block.category,
+        energy: block.energy,
+        priority: block.priority,
+      };
+      if (block.type === "fixed") applyFixedPayloadToBlock(block, payload);
+      else if (block.type === "task") applyTaskPayloadToBlock(block, payload);
+    }
+
+    sortBlocks(dayEntry.result.blocks);
+    updateWeekDayAfterLocalChange(changedDate, { scrollToRuntimeId: drag.runtimeId });
+    registerScheduleUndo(undoSnapshot, {
+      changedDates: [changedDate],
+      label: `已批量调整 ${drag.groupItems.length} 个日程`,
+    });
+    return true;
+  }
+
+  const editableSchedule = ensureEditableDaySchedule();
+  for (const item of drag.groupItems) {
+    const block = editableSchedule.blocks.find((candidate) => candidate.runtimeId === item.runtimeId);
+    if (!block) continue;
+    const payload = {
+      title: block.title,
+      startMin: item.originalStartMin + deltaMin,
+      endMin: item.originalEndMin + deltaMin,
+      bufferMin: block.bufferMin,
+      category: block.category,
+      energy: block.energy,
+      priority: block.priority,
+    };
+    if (block.type === "fixed") applyFixedPayloadToBlock(block, payload);
+    else if (block.type === "task") applyTaskPayloadToBlock(block, payload);
+  }
+
+  sortBlocks(editableSchedule.blocks);
+  state.lastSchedule = prepareSchedule(editableSchedule);
+  saveLocalDayOverride(state.lastSchedule.date, state.lastSchedule);
+  persistPlanState();
+  renderSchedule(state.lastSchedule, { scrollToRuntimeId: drag.runtimeId });
+  syncCurrentScheduleToWeekPlan();
+  registerScheduleUndo(undoSnapshot, {
+    changedDates: [state.lastSchedule.date],
+    label: `已批量调整 ${drag.groupItems.length} 个日程`,
+  });
+  return true;
 }
 
 function resolveEditorBlock(surface, date, runtimeId) {
@@ -5013,11 +5297,117 @@ function removeTaskBlock(runtimeId, options = {}) {
   });
 }
 
+function removeScheduleBlocks(selectionKeys, options = {}) {
+  const keys = Array.isArray(selectionKeys) ? selectionKeys.filter(Boolean) : [];
+  if (keys.length === 0) return;
+
+  const undoSnapshot = options.undoSnapshot || captureScheduleUndoSnapshot();
+  const changedDates = new Set();
+  let removedCount = 0;
+
+  const entries = keys
+    .map((key) => {
+      const [surface, date, runtimeId] = key.split(":");
+      return { surface: surface || "day", date, runtimeId };
+    })
+    .filter((entry) => entry.runtimeId);
+
+  const dayEntries = entries.filter((entry) => entry.surface === "day");
+  if (dayEntries.length > 0) {
+    const editableSchedule = ensureEditableDaySchedule();
+    const removeIds = new Set(dayEntries.map((entry) => entry.runtimeId));
+    const removedBlocks = editableSchedule.blocks.filter((block) => removeIds.has(block.runtimeId));
+    const removedFixedIds = new Set(removedBlocks.filter((block) => block.type === "fixed" && block.id).map((block) => block.id));
+
+    if (removedBlocks.length > 0) {
+      editableSchedule.blocks = editableSchedule.blocks.filter((block) => {
+        if (removeIds.has(block.runtimeId)) return false;
+        if (block.type === "buffer" && removedFixedIds.has(block.sourceId)) return false;
+        return true;
+      });
+      for (const block of removedBlocks) {
+        if (block.type === "task") delete state.completed[block.runtimeId];
+      }
+
+      removedCount += removedBlocks.length;
+      state.lastSchedule = prepareSchedule(editableSchedule);
+      saveLocalDayOverride(state.lastSchedule.date, state.lastSchedule);
+      persistData();
+      persistPlanState();
+      renderSchedule(state.lastSchedule);
+      syncCurrentScheduleToWeekPlan();
+      changedDates.add(state.lastSchedule.date);
+    }
+  }
+
+  const weekEntriesByDate = new Map();
+  entries
+    .filter((entry) => entry.surface === "week")
+    .forEach((entry) => {
+      if (!weekEntriesByDate.has(entry.date)) weekEntriesByDate.set(entry.date, []);
+      weekEntriesByDate.get(entry.date).push(entry);
+    });
+
+  if (weekEntriesByDate.size > 0) {
+    ensureEditableWeekPlan();
+    for (const [date, dateEntries] of weekEntriesByDate.entries()) {
+      const dayEntry = findWeekDayEntry(date);
+      if (!dayEntry?.ok) continue;
+
+      const removeIds = new Set(dateEntries.map((entry) => entry.runtimeId));
+      const removedBlocks = (dayEntry.result.blocks || []).filter((block) => removeIds.has(block.runtimeId));
+      const removedFixedIds = new Set(removedBlocks.filter((block) => block.type === "fixed" && block.id).map((block) => block.id));
+      if (removedBlocks.length === 0) continue;
+
+      dayEntry.result.blocks = dayEntry.result.blocks.filter((block) => {
+        if (removeIds.has(block.runtimeId)) return false;
+        if (block.type === "buffer" && removedFixedIds.has(block.sourceId)) return false;
+        return true;
+      });
+      for (const block of removedBlocks) {
+        if (block.type === "task") delete state.completed[block.runtimeId];
+      }
+
+      removedCount += removedBlocks.length;
+      changedDates.add(date);
+      updateWeekDayAfterLocalChange(date);
+    }
+  }
+
+  if (removedCount === 0) return;
+
+  state.ui.selectedScheduleBlocks = state.ui.selectedScheduleBlocks.filter((key) => !keys.includes(key));
+  updateScheduleSelectionDom();
+  persistData();
+  registerScheduleUndo(undoSnapshot, {
+    changedDates: [...changedDates],
+    label: removedCount > 1 ? `已删除 ${removedCount} 个日程` : "已删除日程",
+  });
+}
+
+function getContextSelectionKeys(surface, date, runtimeId) {
+  const key = scheduleSelectionKey(surface, date, runtimeId);
+  if (!key || !state.ui.selectedScheduleBlocks.includes(key)) return [key].filter(Boolean);
+  return state.ui.selectedScheduleBlocks.filter((item) => {
+    const [itemSurface, itemDate] = item.split(":");
+    return itemSurface === surface && itemDate === date;
+  });
+}
+
 function openBlockContextMenu(runtimeId, x, y) {
   const block = findBlock(runtimeId);
   if (!block) return;
 
+  const date = state.lastSchedule?.date || $("planDate").value || todayInputValue();
+  const selectionKeys = getContextSelectionKeys("day", date, runtimeId);
   const items = [];
+  if (selectionKeys.length > 1) {
+    items.push({ action: "delete-selected-schedule", label: `删除选中日程（${selectionKeys.length}）`, surface: "day", date, danger: true });
+    items.push({ action: "open-settings", label: "日历设置" });
+    openContextMenu({ x, y, items });
+    return;
+  }
+
   if (block.type === "task") {
     items.push({ action: "edit-event", label: "快速编辑", runtimeId, surface: "day" });
     items.push({
@@ -5026,9 +5416,10 @@ function openBlockContextMenu(runtimeId, x, y) {
       runtimeId,
       surface: "day",
     });
-    items.push({ action: "delete-task", label: "删除任务", runtimeId, surface: "day", danger: true });
+    items.push({ action: "delete-schedule-block", label: "删除任务", runtimeId, surface: "day", date, danger: true });
   } else if (block.type === "fixed") {
     items.push({ action: "edit-event", label: "编辑定时事项", runtimeId, surface: "day" });
+    items.push({ action: "delete-schedule-block", label: "移出这一天", runtimeId, surface: "day", date, danger: true });
   }
 
   items.push({ action: "open-settings", label: "日历设置" });
@@ -5164,6 +5555,7 @@ function readEventFormPayload() {
 
 function beginDragSession(pointerEvent, eventEl, block, config) {
   const scrollEl = config.scrollEl || null;
+  const groupItems = getSelectedDragGroup(config);
   state.ui.drag = {
     pointerId: pointerEvent.pointerId,
     runtimeId: config.runtimeId,
@@ -5184,6 +5576,7 @@ function beginDragSession(pointerEvent, eventEl, block, config) {
     rangeEndMin: config.rangeEndMin,
     offsetTopPx: config.offsetTopPx || 0,
     minVisualHeight: config.minVisualHeight,
+    groupItems,
     resolveBlock: config.resolveBlock,
     rerender: config.rerender,
     commit: config.commit,
@@ -5191,6 +5584,9 @@ function beginDragSession(pointerEvent, eventEl, block, config) {
   };
 
   eventEl.classList.add("dragging");
+  if (groupItems.length > 1) {
+    groupItems.forEach((item) => item.element.classList.add("dragging"));
+  }
   try {
     eventEl.setPointerCapture(pointerEvent.pointerId);
   } catch {
@@ -5231,6 +5627,7 @@ function beginDrag(pointerEvent, eventEl, mode) {
     runtimeId,
     mode,
     surface: "day",
+    root: $("schedule"),
     pixelsPerMinute: getDayPixelsPerMinute(),
     rangeStartMin: FULL_DAY_START_MIN,
     rangeEndMin: FULL_DAY_END_MIN,
@@ -5280,6 +5677,7 @@ function beginWeekDrag(pointerEvent, eventEl, mode) {
     mode,
     date,
     surface: "week",
+    root: $("weekPlan"),
     pixelsPerMinute: getWeekPixelsPerMinute(),
     rangeStartMin: FULL_DAY_START_MIN,
     rangeEndMin: FULL_DAY_END_MIN,
@@ -5338,7 +5736,16 @@ function handleGlobalPointerMove(event) {
 
   if (drag.mode === "move") {
     nextStart = roundToStep(drag.originalStartMin + deltaMin, getSnapMinutes(), "nearest");
-    nextStart = Math.max(drag.rangeStartMin, Math.min(nextStart, drag.rangeEndMin - duration));
+    if (Array.isArray(drag.groupItems) && drag.groupItems.length > 1) {
+      const earliest = Math.min(...drag.groupItems.map((item) => item.originalStartMin));
+      const latest = Math.max(...drag.groupItems.map((item) => item.originalEndMin));
+      const minDelta = drag.rangeStartMin - earliest;
+      const maxDelta = drag.rangeEndMin - latest;
+      const nextDelta = Math.max(minDelta, Math.min(nextStart - drag.originalStartMin, maxDelta));
+      nextStart = drag.originalStartMin + nextDelta;
+    } else {
+      nextStart = Math.max(drag.rangeStartMin, Math.min(nextStart, drag.rangeEndMin - duration));
+    }
     nextEnd = nextStart + duration;
   } else if (drag.mode === "start") {
     nextStart = roundToStep(drag.originalStartMin + deltaMin, getSnapMinutes(), "nearest");
@@ -5352,8 +5759,10 @@ function handleGlobalPointerMove(event) {
 
   drag.previewStartMin = nextStart;
   drag.previewEndMin = nextEnd;
-  drag.validation = computeDragValidation(drag);
+  drag.validation =
+    Array.isArray(drag.groupItems) && drag.groupItems.length > 1 ? computeGroupDragValidation(drag) : computeDragValidation(drag);
   applyDragPreview(drag);
+  applyGroupDragPreview(drag);
 
   if (drag.validation.level === "error") {
     const prefix =
@@ -5362,8 +5771,10 @@ function handleGlobalPointerMove(event) {
   } else if (drag.validation.level === "warn") {
     showDragHint(`提示: ${drag.validation.message}`, "warn", event.clientX, event.clientY);
   } else {
+    const label =
+      Array.isArray(drag.groupItems) && drag.groupItems.length > 1 ? `批量 ${drag.groupItems.length} 项 | ` : "";
     showDragHint(
-      `${minutesToTime(nextStart)}-${minutesToTime(nextEnd)} | 吸附 ${getSnapMinutes()} 分钟`,
+      `${label}${minutesToTime(nextStart)}-${minutesToTime(nextEnd)} | 吸附 ${getSnapMinutes()} 分钟`,
       "ok",
       event.clientX,
       event.clientY
@@ -5396,6 +5807,37 @@ async function handleGlobalPointerUp(event) {
 
   if (!changed) {
     drag.rerender();
+    return;
+  }
+
+  const isGroupDrag = Array.isArray(drag.groupItems) && drag.groupItems.length > 1;
+  if (isGroupDrag) {
+    const validation = computeGroupDragValidation(drag);
+    if (validation.level !== "ok") {
+      if (!Array.isArray(validation.issues) || validation.issues.length === 0) {
+        alert(`无法保存批量调整：${validation.message}`);
+        drag.rerender();
+        return;
+      }
+
+      const confirmed = await requestPlacementConfirmation(validation, {
+        title: "检测到时间冲突",
+        summary: "这次批量调整会带来以下影响：",
+        confirmLabel: "仍然应用",
+        editLabel: "继续调整",
+      });
+      if (!confirmed) {
+        drag.rerender();
+        return;
+      }
+    }
+
+    try {
+      commitGroupDrag(drag);
+    } catch (error) {
+      alert(error.message);
+      drag.rerender();
+    }
     return;
   }
 
@@ -5903,12 +6345,21 @@ function hookScheduleInteractions() {
     if (target.closest("[data-action='toggle-complete']")) return;
 
     const eventEl = target.closest(".calendar-event[data-editable='1']");
-    if (!eventEl) return;
+    if (!eventEl) {
+      if (target.closest(".calendar-grid")) {
+        beginScheduleSelection(event, { root: schedule });
+      }
+      return;
+    }
 
     const handle = target.closest(".event-resize");
     const mode = handle?.getAttribute("data-resize") || "move";
     beginDrag(event, eventEl, mode);
   });
+
+  schedule.addEventListener("pointermove", handleScheduleSelectionMove);
+  schedule.addEventListener("pointerup", finishScheduleSelection);
+  schedule.addEventListener("pointercancel", finishScheduleSelection);
 }
 
 function hookWeekInteractions() {
@@ -5953,12 +6404,22 @@ function hookWeekInteractions() {
     if (!(target instanceof HTMLElement)) return;
 
     const eventEl = target.closest(".week-preview-event[data-editable='1']");
-    if (!eventEl) return;
+    if (!eventEl && target.closest(".week-lane-event")) return;
+    if (!eventEl) {
+      if (target.closest(".week-day-column, .week-calendar-body, .week-lane-track")) {
+        beginScheduleSelection(event, { root: weekPlan });
+      }
+      return;
+    }
 
     const handle = target.closest(".week-event-resize");
     const mode = handle?.getAttribute("data-resize") || "move";
     beginWeekDrag(event, eventEl, mode);
   });
+
+  weekPlan.addEventListener("pointermove", handleScheduleSelectionMove);
+  weekPlan.addEventListener("pointerup", finishScheduleSelection);
+  weekPlan.addEventListener("pointercancel", finishScheduleSelection);
 }
 
 function getScheduleWheelTarget(eventTarget) {
@@ -6041,6 +6502,22 @@ function hookContextMenuActions() {
 
     if ((action === "remove-task" || action === "delete-task") && runtimeId) {
       removeTaskBlock(runtimeId, { surface, date });
+      return;
+    }
+
+    if (action === "delete-schedule-block" && runtimeId) {
+      const targetDate = date || state.lastSchedule?.date || $("planDate").value || todayInputValue();
+      removeScheduleBlocks([scheduleSelectionKey(surface, targetDate, runtimeId)]);
+      return;
+    }
+
+    if (action === "delete-selected-schedule") {
+      const targetDate = date || state.lastSchedule?.date || $("planDate").value || todayInputValue();
+      const keys = state.ui.selectedScheduleBlocks.filter((key) => {
+        const [itemSurface, itemDate] = key.split(":");
+        return itemSurface === surface && itemDate === targetDate;
+      });
+      removeScheduleBlocks(keys);
       return;
     }
 
@@ -6191,10 +6668,11 @@ function renderWeekPlanGrid(container, plan, selectedDate) {
         day.date === state.ui.aiFocus?.date &&
         Array.isArray(state.ui.aiFocus?.runtimeIds) &&
         state.ui.aiFocus.runtimeIds.includes(block.runtimeId);
+      const isSelected = isScheduleBlockSelected("week", day.date, block.runtimeId);
       const eventEl = document.createElement("article");
       eventEl.className = `week-preview-event ${eventClassName(block)}${height < 52 ? " compact" : ""}${
         isAiFocused ? " ai-focus" : ""
-      }`;
+      }${isSelected ? " selected" : ""}`;
       eventEl.dataset.weekDate = day.date;
       eventEl.dataset.runtimeId = block.runtimeId;
       eventEl.dataset.blockType = block.type;
@@ -6348,6 +6826,7 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
         day.date === state.ui.aiFocus?.date &&
         Array.isArray(state.ui.aiFocus?.runtimeIds) &&
         state.ui.aiFocus.runtimeIds.includes(block.runtimeId);
+      const isSelected = isScheduleBlockSelected("week", day.date, block.runtimeId);
       const left = block.startMin * lanePixelsPerMinute;
       const rawWidth = (block.endMin - block.startMin) * lanePixelsPerMinute;
       const width = Math.max(56, Math.min(laneWidth - left - 6, rawWidth - 6));
@@ -6356,8 +6835,12 @@ function renderWeekPlanLanes(container, plan, selectedDate) {
       eventEl.type = "button";
       eventEl.className = `week-lane-event ${eventClassName(block)}${width < 120 ? " compact" : ""}${
         isAiFocused ? " ai-focus" : ""
-      }`;
+      }${isSelected ? " selected" : ""}`;
       eventEl.setAttribute("data-load-day", day.date);
+      eventEl.dataset.weekDate = day.date;
+      eventEl.dataset.runtimeId = block.runtimeId;
+      eventEl.dataset.blockType = block.type;
+      eventEl.dataset.editable = block.editable ? "1" : "0";
       eventEl.title = `${block.start}-${block.end} ${block.title}`;
       eventEl.style.left = `${left}px`;
       eventEl.style.top = `${top}px`;
