@@ -5414,6 +5414,48 @@ public sealed class MainWindow : Window
         };
         var saveStatus = Text("", 12, "#64748b");
 
+        bool TryReadSettingsFromForm(bool requireKey, out AiSettings next, out string message)
+        {
+            next = new AiSettings();
+            var nextBaseUrl = (baseUrl.Text.Text ?? "").Trim();
+            var nextPath = (path.Text.Text ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(nextBaseUrl) || !Uri.TryCreate(nextBaseUrl, UriKind.Absolute, out _))
+            {
+                message = "Base URL 必须是有效地址。";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(nextPath))
+            {
+                message = "Chat Path 不能为空。";
+                return false;
+            }
+
+            next.BaseUrl = nextBaseUrl.TrimEnd('/');
+            next.Model = string.IsNullOrWhiteSpace(model.Text.Text) ? "gpt-4.1-mini" : model.Text.Text.Trim();
+            next.ChatPath = nextPath.StartsWith("/", StringComparison.Ordinal) ? nextPath : $"/{nextPath}";
+            next.ApiKey = key.Text.Text ?? "";
+            next.ApiKeyHeader = string.IsNullOrWhiteSpace(header.Text.Text) ? "Authorization" : header.Text.Text.Trim();
+            next.ApiKeyPrefix = prefix.Text.Text ?? "";
+            next.StylePrompt = string.IsNullOrWhiteSpace(style.Text) ? "直接、清晰、简短。" : style.Text.Trim();
+
+            if (requireKey && string.IsNullOrWhiteSpace(next.ApiKey))
+            {
+                message = "API Key 不能为空。";
+                return false;
+            }
+
+            message = "";
+            return true;
+        }
+
+        void SetAiFormStatus(string message, bool error)
+        {
+            saveStatus.Text = message;
+            saveStatus.Foreground = Brush(error ? "#dc2626" : "#16a34a");
+            SetStatus(error ? $"AI 设置：{message}" : message, error);
+        }
+
         var connection = new StackPanel { Spacing = 12 };
         connection.Children.Add(RenderAiSettingsState());
         connection.Children.Add(baseUrl.Panel);
@@ -5455,6 +5497,63 @@ public sealed class MainWindow : Window
             saveStatus.Text = "已填入默认连接配置，保存后生效。";
             saveStatus.Foreground = Brush("#64748b");
         }, secondary: true));
+        var testButton = Button("测试连接", async (sender, _) =>
+        {
+            if (sender is not Button currentButton) return;
+
+            if (!TryReadSettingsFromForm(requireKey: true, out var testSettings, out var message))
+            {
+                SetAiFormStatus(message, error: true);
+                return;
+            }
+
+            currentButton.IsEnabled = false;
+            saveStatus.Text = "正在测试连接...";
+            saveStatus.Foreground = Brush("#2563eb");
+            SetStatus("正在测试 AI 连接");
+            var startedAt = DateTimeOffset.Now;
+            try
+            {
+                var result = await _aiChatService.SendAsync(new AiChatRequest
+                {
+                    Settings = testSettings,
+                    PlannerState = _state,
+                    FocusDate = _focusDate,
+                    CurrentSchedule = _daySchedule,
+                    Messages =
+                    [
+                        new AiChatMessage
+                        {
+                            Role = "user",
+                            Content = "连接测试。请只返回 JSON：{\"text\":\"连接正常\",\"actions\":[]}"
+                        }
+                    ]
+                });
+                var elapsed = Math.Max(1, (int)(DateTimeOffset.Now - startedAt).TotalMilliseconds);
+                var diagnostic = SanitizeAiDiagnostic(result.Text, testSettings);
+                var failed = diagnostic.StartsWith("AI 请求失败", StringComparison.OrdinalIgnoreCase) ||
+                             diagnostic.StartsWith("请先", StringComparison.OrdinalIgnoreCase);
+                if (failed)
+                {
+                    SetAiFormStatus($"测试失败：{diagnostic}", error: true);
+                }
+                else
+                {
+                    saveStatus.Text = $"连接正常。模型：{(string.IsNullOrWhiteSpace(result.Model) ? testSettings.Model : result.Model)}，耗时 {elapsed}ms。";
+                    saveStatus.Foreground = Brush("#16a34a");
+                    SetStatus("AI 连接测试通过");
+                }
+            }
+            catch (Exception ex)
+            {
+                SetAiFormStatus($"测试失败：{SanitizeAiDiagnostic(ex.Message, testSettings)}", error: true);
+            }
+            finally
+            {
+                currentButton.IsEnabled = true;
+            }
+        }, secondary: true);
+        connectionActions.Children.Add(testButton);
         connectionActions.Children.Add(Button("清空 Key", (_, _) =>
         {
             key.Text.Text = "";
@@ -5470,31 +5569,13 @@ public sealed class MainWindow : Window
 
         var saveButton = Button("保存 AI 设置", async (_, _) =>
         {
-            var nextBaseUrl = (baseUrl.Text.Text ?? "").Trim();
-            var nextPath = (path.Text.Text ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(nextBaseUrl) || !Uri.TryCreate(nextBaseUrl, UriKind.Absolute, out _))
+            if (!TryReadSettingsFromForm(requireKey: false, out var nextSettings, out var message))
             {
-                saveStatus.Text = "Base URL 必须是有效地址。";
-                saveStatus.Foreground = Brush("#dc2626");
-                SetStatus("AI 设置未保存：Base URL 无效", error: true);
+                SetAiFormStatus(message, error: true);
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(nextPath))
-            {
-                saveStatus.Text = "Chat Path 不能为空。";
-                saveStatus.Foreground = Brush("#dc2626");
-                SetStatus("AI 设置未保存：Chat Path 为空", error: true);
-                return;
-            }
-
-            _aiSettings.BaseUrl = nextBaseUrl.TrimEnd('/');
-            _aiSettings.Model = string.IsNullOrWhiteSpace(model.Text.Text) ? "gpt-4.1-mini" : model.Text.Text.Trim();
-            _aiSettings.ChatPath = nextPath.StartsWith("/", StringComparison.Ordinal) ? nextPath : $"/{nextPath}";
-            _aiSettings.ApiKey = key.Text.Text ?? "";
-            _aiSettings.ApiKeyHeader = string.IsNullOrWhiteSpace(header.Text.Text) ? "Authorization" : header.Text.Text.Trim();
-            _aiSettings.ApiKeyPrefix = prefix.Text.Text ?? "";
-            _aiSettings.StylePrompt = string.IsNullOrWhiteSpace(style.Text) ? "直接、清晰、简短。" : style.Text.Trim();
+            _aiSettings = nextSettings;
             await _store.SaveAiSettingsAsync(_aiSettings);
             saveStatus.Text = _aiSettings.ApiKey.Length == 0
                 ? "已保存连接配置。API Key 为空时，对话页会提示先配置密钥。"
@@ -5524,6 +5605,23 @@ public sealed class MainWindow : Window
         root.Children.Add(columns);
         root.Children.Add(saveButton);
         return Scroll(root);
+    }
+
+    private static string SanitizeAiDiagnostic(string text, AiSettings settings)
+    {
+        var value = string.IsNullOrWhiteSpace(text) ? "没有返回诊断信息。" : text.Trim();
+        var key = (settings.ApiKey ?? "").Trim().Trim('"', '\'');
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            value = value.Replace(key, "******", StringComparison.Ordinal);
+            var prefixed = $"{settings.ApiKeyPrefix}{key}".Trim();
+            if (!string.IsNullOrWhiteSpace(prefixed))
+            {
+                value = value.Replace(prefixed, "******", StringComparison.Ordinal);
+            }
+        }
+
+        return value.Length > 220 ? value[..220] + "..." : value;
     }
 
     private Control RenderAiSettingsState()
