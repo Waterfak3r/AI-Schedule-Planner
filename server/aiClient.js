@@ -1,4 +1,5 @@
 const { normalizeActionList } = require("./scheduleActions");
+const { minutesToTime, parseTimeToMinutes } = require("./time");
 
 const DEFAULT_MODEL = process.env.RELAY_MODEL || process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const DEFAULT_BASE_URL =
@@ -41,6 +42,13 @@ function buildSystemPrompt(context = {}) {
     "3) remove_block: {\"type\":\"remove_block\",\"matchTitle\":\"...\"}",
     "When the user wants direct schedule changes, do not skip the JSON block.",
     "Use exact existing task titles in matchTitle when moving or removing blocks.",
+    "If the user gives a new time for a title that already exists in Loaded blocks, use move_block unless they clearly ask to add another/new extra instance.",
+    "Use add_task_block for genuinely new items, or when the user explicitly says to add another instance.",
+    "Normalize casual time expressions, including Chinese numerals and punctuation variants such as 八点20, 8：三十, 九点;40, 七点半, noon, and 3pm, into HH:MM 24-hour time.",
+    "If a direct add or move request has a clear item and start time but no end time or duration, default it to a 30-minute block and clearly say the duration is uncertain and the user should adjust it if needed.",
+    "For sequential multi-event wording, a later event start can be used as the previous event's end boundary, but do not create an action for the later event unless it also has an end time or duration.",
+    "If the request is vague planning advice without both a concrete item and concrete timing, do not append schedule actions. Examples that must return no JSON action: 安排一下, 晚上安排点东西, 明天学习一下, I need to study tomorrow, move it later, delete that.",
+    "When Loaded blocks contain titles such as 写代码, 背单词, 复习数学, or 课程, map common aliases to the exact title before choosing move/remove: code/coding/code block -> 写代码, vocab/words -> 背单词, math review/math -> 复习数学, class/course -> 课程.",
     "Do not include JSON wrapper unless user intent is to apply or modify schedule.",
     "Chinese direct-edit requests are direct schedule changes too: for example, 把复习安排到19:00到19:30 means add_task_block with title 复习, start 19:00, end 19:30.",
   ];
@@ -198,12 +206,125 @@ function shouldSkipLocalAddDerivation(text) {
   );
 }
 
+function resolveCasualHour(hourValue, marker, inheritedEvening) {
+  let hour = parseChineseNumber(hourValue);
+  if (hour == null || hour < 0 || hour > 23) return null;
+
+  const mark = String(marker || "");
+  const isEvening = /(?:下午|晚上|今晚)/u.test(mark) || inheritedEvening;
+  const isMorning = /(?:上午|早上|明早|明天早上)/u.test(mark);
+
+  if (isEvening && !isMorning && hour >= 1 && hour < 12) {
+    hour += 12;
+  } else if (/中午/u.test(mark) && hour >= 1 && hour < 11) {
+    hour += 12;
+  }
+
+  return hour;
+}
+
+function resolveCasualMinute(minuteValue) {
+  const raw = String(minuteValue || "").trim();
+  if (!raw) return 0;
+  if (raw === "半") return 30;
+  const parsed = parseChineseNumber(raw);
+  return parsed != null && parsed >= 0 && parsed <= 59 ? parsed : null;
+}
+
+function extractCasualTimeMentions(text) {
+  const src = String(text || "");
+  const pattern =
+    /(今晚|晚上|下午|中午|上午|早上|明早|明天早上)?\s*(\d{1,2}|[一二两三四五六七八九十]{1,3})\s*(?:点|时)(?:\s*(半|[0-5]?\d|[一二两三四五六七八九十]{1,3}))?/gu;
+  const mentions = [];
+  let match = null;
+  let inheritedEvening = false;
+
+  while ((match = pattern.exec(src))) {
+    const marker = match[1] || "";
+    if (/(?:下午|晚上|今晚)/u.test(marker)) inheritedEvening = true;
+    if (/(?:上午|早上|明早|明天早上)/u.test(marker)) inheritedEvening = false;
+
+    const hour = resolveCasualHour(match[2], marker, inheritedEvening);
+    const minute = resolveCasualMinute(match[3]);
+    if (hour == null || minute == null) continue;
+
+    mentions.push({
+      raw: match[0],
+      index: match.index,
+      endIndex: match.index + match[0].length,
+      time: normalizeClockText(hour, minute),
+    });
+  }
+
+  return mentions;
+}
+
+function cleanupSequentialTitle(value) {
+  return cleanupDerivedTitle(value)
+    .replace(/^(?:要到|要去|要|到|去|在|大概|大约|左右|，|,|\s)+/u, "")
+    .replace(/(?:然后|接着|随后|之后)[\s\S]*$/u, "")
+    .replace(/^[，。,.!?！？；;：:\s]+|[，。,.!?！？；;：:\s]+$/gu, "")
+    .trim()
+    .slice(0, 80);
+}
+
+function deriveLocalSequentialBoundaryAction(userText) {
+  const text = String(userText || "");
+  if (!/(?:然后|接着|随后|之后)/u.test(text)) return null;
+
+  const mentions = extractCasualTimeMentions(text);
+  if (mentions.length < 2) return null;
+
+  const first = mentions[0];
+  const second = mentions[1];
+  const connectorMatch = /(?:然后|接着|随后|之后)/u.exec(text.slice(first.endIndex, second.index));
+  if (!connectorMatch) return null;
+
+  const connectorIndex = first.endIndex + connectorMatch.index;
+  const title = cleanupSequentialTitle(text.slice(first.endIndex, connectorIndex));
+  if (!title) return null;
+  const actions = [
+    {
+      type: "add_task_block",
+      title,
+      matchTitle: title,
+      start: first.time,
+      end: second.time,
+      category: inferCategoryFromTitle(title),
+      energy: "medium",
+      priority: 3,
+    },
+  ];
+
+  const secondTitle = cleanupSequentialTitle(text.slice(second.endIndex));
+  if (secondTitle) {
+    actions.push({
+      type: "add_task_block",
+      title: secondTitle,
+      matchTitle: secondTitle,
+      start: second.time,
+      end: defaultEndTimeFromStart(second.time),
+      category: inferCategoryFromTitle(secondTitle),
+      energy: "medium",
+      priority: 3,
+    });
+  }
+
+  return {
+    text: appendDefaultDurationNotice(
+      `已准备把“${title}”安排在 ${first.time}-${second.time}${secondTitle ? `，并把“${secondTitle}”暂定为 ${second.time}-${defaultEndTimeFromStart(second.time)}` : ""}。`,
+      secondTitle ? 1 : 0
+    ),
+    actions,
+  };
+}
+
 function deriveLocalAddActionsFromUserText(messages) {
   const userText = getLastUserMessage(messages);
   if (!userText || shouldSkipLocalAddDerivation(userText)) return null;
 
   const timeRange = extractSimpleTimeRange(userText);
-  if (!timeRange) return null;
+  if (!timeRange) return deriveLocalSequentialBoundaryAction(userText);
 
   const title = inferAddActionTitle(userText, timeRange);
   if (!title) return null;
@@ -231,6 +352,419 @@ function shouldReplaceClarificationText(text) {
   );
 }
 
+function normalizeLooseText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\uFF1A]/g, ":")
+    .replace(/[\uFF1B]/g, ";")
+    .replace(/\s+/g, " ");
+}
+
+function normalizeAliasKey(value) {
+  return normalizeLooseText(value)
+    .replace(/[“”"'`]/g, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\bblocks?\b/g, "block")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getContextScheduleBlocks(context) {
+  return Array.isArray(context?.scheduleBlocks) ? context.scheduleBlocks : [];
+}
+
+function aliasesForKnownBlockTitle(title) {
+  const normalizedTitle = normalizeAliasKey(title);
+  const aliases = new Set([normalizedTitle]);
+
+  if (normalizedTitle === "写代码") {
+    ["代码", "写代", "写代吗", "code", "coding", "code block", "coding block"].forEach((item) =>
+      aliases.add(item)
+    );
+  }
+
+  if (normalizedTitle === "背单词") {
+    ["单词", "vocab", "vocabulary", "word", "words"].forEach((item) => aliases.add(item));
+  }
+
+  if (normalizedTitle === "复习数学") {
+    ["数学", "数学复习", "math", "math review", "mathematics"].forEach((item) => aliases.add(item));
+  }
+
+  if (normalizedTitle === "课程") {
+    ["课", "上课", "class", "course", "lesson"].forEach((item) => aliases.add(item));
+  }
+
+  return aliases;
+}
+
+function resolveExistingBlockTitle(value, context) {
+  const needle = normalizeAliasKey(value);
+  if (!needle) return "";
+
+  for (const block of getContextScheduleBlocks(context)) {
+    const title = String(block?.title || "").trim();
+    if (!title) continue;
+    const aliases = aliasesForKnownBlockTitle(title);
+    if (aliases.has(needle)) return title;
+  }
+
+  return "";
+}
+
+function textMentionsExistingTitle(userText, title, context) {
+  const text = normalizeAliasKey(userText);
+  if (!text) return false;
+
+  const direct = resolveExistingBlockTitle(title, context);
+  const targetTitle = direct || String(title || "").trim();
+  for (const alias of aliasesForKnownBlockTitle(targetTitle)) {
+    if (!alias) continue;
+    if (text.includes(alias)) return true;
+  }
+
+  return false;
+}
+
+function userRequestsExtraInstance(text) {
+  return /(?:再加|再添加|另加|另一个|加一个|加个|新增|添加|新建|创建|another|extra|additional|new\s+(?:task|block|item)|add\s+another)/iu.test(
+    String(text || "")
+  );
+}
+
+function hasExplicitTimeRange(text) {
+  const src = normalizeLooseText(text);
+  if (!src) return false;
+
+  return (
+    /\bfrom\b[\s\S]{0,60}\bto\b/i.test(src) ||
+    /\bbetween\b[\s\S]{0,60}\band\b/i.test(src) ||
+    /(?:\d|[一二三四五六七八九十两零〇半])[\s\S]{0,12}(?:-|~|～|—|–|－|到|至|\bto\b|until|til|through)[\s\S]{0,12}(?:\d|[一二三四五六七八九十两零〇半]|noon|midnight)/iu.test(
+      src
+    )
+  );
+}
+
+function hasDuration(text) {
+  return /(?:\d+\s*(?:min|mins|minutes?|hours?|hrs?)|half\s+an?\s+hour|\d+\s*(?:分钟|小时|个小时)|半小时|半个小时|一小时|一个小时|两小时|两个小时|大概\s*\d+\s*(?:分钟|小时|个小时))/iu.test(
+    String(text || "")
+  );
+}
+
+function hasConcreteTimingForAddOrMove(text) {
+  return hasExplicitTimeRange(text) || hasDuration(text);
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function chineseDigit(value) {
+  const map = {
+    "\u96f6": 0,
+    "\u3007": 0,
+    "\u4e00": 1,
+    "\u4e8c": 2,
+    "\u4e24": 2,
+    "\u4e09": 3,
+    "\u56db": 4,
+    "\u4e94": 5,
+    "\u516d": 6,
+    "\u4e03": 7,
+    "\u516b": 8,
+    "\u4e5d": 9,
+  };
+  return map[value];
+}
+
+function parseChineseNumber(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return Number.parseInt(text, 10);
+  if (text === "\u5341") return 10;
+  if (text.startsWith("\u5341")) {
+    const tail = chineseDigit(text.slice(1));
+    return tail == null ? null : 10 + tail;
+  }
+  const tenIndex = text.indexOf("\u5341");
+  if (tenIndex > 0) {
+    const head = chineseDigit(text.slice(0, tenIndex));
+    const tailText = text.slice(tenIndex + 1);
+    const tail = tailText ? chineseDigit(tailText) : 0;
+    return head == null || tail == null ? null : head * 10 + tail;
+  }
+  return chineseDigit(text);
+}
+
+function toChineseNumber(value) {
+  const n = Number(value);
+  const digits = ["\u96f6", "\u4e00", "\u4e8c", "\u4e09", "\u56db", "\u4e94", "\u516d", "\u4e03", "\u516b", "\u4e5d"];
+  if (!Number.isInteger(n) || n < 0 || n > 99) return "";
+  if (n < 10) return digits[n];
+  if (n === 10) return "\u5341";
+  if (n < 20) return `\u5341${digits[n - 10]}`;
+  const tens = Math.floor(n / 10);
+  const ones = n % 10;
+  return `${digits[tens]}\u5341${ones ? digits[ones] : ""}`;
+}
+
+function timeMentionPatterns(time) {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(time || ""));
+  if (!match) return [];
+
+  const hour24 = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2], 10);
+  const hour12 = hour24 % 12 || 12;
+  const minuteText = String(minute).padStart(2, "0");
+  const hourTexts = Array.from(new Set([String(hour24), String(hour12), String(hour12).padStart(2, "0")]));
+  const chineseHourTexts = Array.from(new Set([toChineseNumber(hour24), toChineseNumber(hour12)].filter(Boolean)));
+  const chineseMinute = toChineseNumber(minute);
+  const patterns = [];
+
+  if (hour24 === 12 && minute === 0) patterns.push("\\bnoon\\b", "\u4e2d\u5348");
+  if (hour24 === 0 && minute === 0) patterns.push("\\bmidnight\\b", "\u96f6\u70b9");
+
+  for (const hour of hourTexts) {
+    patterns.push(`${escapeRegExp(hour)}\\s*[:\uFF1A;；.]\\s*${minuteText}`);
+    if (minute > 0 && chineseMinute) {
+      patterns.push(`${escapeRegExp(hour)}\\s*[:\uFF1A;；.]\\s*${chineseMinute}`);
+    }
+    if (minute === 0) {
+      patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)(?:\\s*\u6574)?`);
+      patterns.push(`${escapeRegExp(hour)}\\s*p\\.?m\\.?`);
+      patterns.push(`${escapeRegExp(hour)}\\s*a\\.?m\\.?`);
+      patterns.push(`\\b(?:at|around|about|by)\\s+${escapeRegExp(hour)}\\b`);
+    } else {
+      const minuteShort = minuteText.replace(/^0/, "");
+      const minutePrefix = minute < 10 ? "(?:\u96f6|0)?" : "";
+      patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*${minutePrefix}${minuteShort}`);
+      patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${minuteText}`);
+      patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${minuteShort}`);
+      if (minute === 30) patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*\u534a`);
+      if (minute === 15) patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*\u4e00\u523b`);
+      if (minute === 45) patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*\u4e09\u523b`);
+      if (chineseMinute) {
+        patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*(?:\u96f6)?${chineseMinute}`);
+        patterns.push(`${escapeRegExp(hour)}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${chineseMinute}`);
+      }
+    }
+  }
+
+  for (const chineseHour of chineseHourTexts) {
+    if (minute === 0) {
+      patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)(?:\\s*\u6574)?`);
+    } else if (minute === 30) {
+      patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*\u534a`);
+    } else {
+      const minuteShort = minuteText.replace(/^0/, "");
+      const minutePrefix = minute < 10 ? "(?:\u96f6|0)?" : "";
+      patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*${minutePrefix}${minuteShort}`);
+      patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${minuteText}`);
+      patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${minuteShort}`);
+      if (minute === 15) patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*\u4e00\u523b`);
+      if (minute === 45) patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*\u4e09\u523b`);
+      if (chineseMinute) {
+        patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*(?:\u96f6)?${chineseMinute}`);
+        patterns.push(`${chineseHour}\\s*(?:\u70b9|\u65f6)\\s*[:\uFF1A;；.]\\s*${chineseMinute}`);
+      }
+    }
+  }
+
+  return patterns;
+}
+
+function timeMentionedInText(time, text) {
+  const src = String(text || "");
+  return timeMentionPatterns(time).some((pattern) => new RegExp(pattern, "iu").test(src));
+}
+
+function actionHasConcreteTiming(text, action) {
+  if (hasDuration(text)) return true;
+  return timeMentionedInText(action.start, text) && timeMentionedInText(action.end, text);
+}
+
+function actionHasStartMention(text, action) {
+  return timeMentionedInText(action.start, text);
+}
+
+function defaultEndTimeFromStart(start) {
+  const startMin = parseTimeToMinutes(start);
+  if (startMin == null) return "";
+  return minutesToTime(Math.min(startMin + 30, 24 * 60));
+}
+
+function applyDefaultDuration(action) {
+  const defaultEnd = defaultEndTimeFromStart(action.start);
+  if (!defaultEnd) return action;
+  return {
+    ...action,
+    end: defaultEnd,
+  };
+}
+
+function appendDefaultDurationNotice(text, count) {
+  if (!count) return text;
+  const base = String(text || "").trim();
+  const notice =
+    count > 1
+      ? `其中 ${count} 个事项缺少结束时间，我先按 30 分钟生成；这些时间段不确定，请你在日程里自行修改。`
+      : "有 1 个事项缺少结束时间，我先按 30 分钟生成；这个时间段不确定，请你在日程里自行修改。";
+  return base ? `${base}\n\n${notice}` : notice;
+}
+
+function localActionAlreadyCovered(existingActions, candidate) {
+  const candidateTitle = normalizeAliasKey(candidate.title || candidate.matchTitle);
+  return existingActions.some((action) => {
+    const actionTitle = normalizeAliasKey(action.title || action.matchTitle);
+    const sameEventKeyword =
+      /考试|exam/i.test(actionTitle) && /考试|exam/i.test(candidateTitle);
+    return (
+      action.type === candidate.type &&
+      action.start === candidate.start &&
+      action.end === candidate.end &&
+      (actionTitle.includes(candidateTitle) || candidateTitle.includes(actionTitle) || sameEventKeyword)
+    );
+  });
+}
+
+function mergeSequentialFallbackActions(userText, existingActions) {
+  const derived = deriveLocalSequentialBoundaryAction(userText);
+  if (!derived) {
+    return { actions: existingActions, defaultedDurationCount: 0 };
+  }
+
+  const merged = [...existingActions];
+  let defaultedDurationCount = 0;
+  for (const action of derived.actions) {
+    if (localActionAlreadyCovered(merged, action)) continue;
+    merged.push(action);
+    if (action.end === defaultEndTimeFromStart(action.start) && !timeMentionedInText(action.end, userText)) {
+      defaultedDurationCount += 1;
+    }
+  }
+
+  return { actions: merged, defaultedDurationCount };
+}
+
+function isVagueScheduleRequest(text) {
+  const src = normalizeLooseText(text);
+  if (!src) return false;
+
+  if (hasConcreteTimingForAddOrMove(src)) return false;
+  if (/(?:取消|删除|移除|去掉|不要了|删掉|remove|delete|cancel|drop|take out|skip|no .+today)/iu.test(src)) {
+    return /(?:那个|这个|那项|这项|它|\bit\b|\bthat\b)/iu.test(src);
+  }
+
+  return /^(?:安排一下|帮我安排一下|晚上安排点东西|明天学习一下|i need to study tomorrow|move it later|delete that)$/iu.test(
+    src
+  );
+}
+
+function buildActionClarificationText(userText, reason) {
+  if (reason === "missing-time-range") {
+    return "我看到了开始时间，但还需要结束时间或持续时长，确认后才能修改日程。";
+  }
+
+  if (reason === "vague") {
+    return "这条请求还缺少明确的事项或时间，我需要更具体的信息后才能修改日程。";
+  }
+
+  return "这条请求的信息还不够，我需要明确的事项和时间后才能修改日程。";
+}
+
+function sanitizeScheduleActions({ inputMessages, context, cleanedText, actions }) {
+  const userText = getLastUserMessage(inputMessages);
+  const safeActions = Array.isArray(actions) ? actions : [];
+  if (safeActions.length === 0) {
+    return { cleanedText, actions: safeActions };
+  }
+
+  const vagueRequest = isVagueScheduleRequest(userText);
+  const sanitized = [];
+  let droppedReason = "";
+  let defaultedDurationCount = 0;
+
+  for (const action of safeActions) {
+    if (vagueRequest && action.type !== "remove_block") {
+      droppedReason = "vague";
+      continue;
+    }
+
+    if (action.type === "add_task_block") {
+      const shouldDefaultDuration = !actionHasConcreteTiming(userText, action) && actionHasStartMention(userText, action);
+      if (!actionHasConcreteTiming(userText, action) && !shouldDefaultDuration) {
+        droppedReason = "missing-time-range";
+        continue;
+      }
+
+      const actionWithTiming = shouldDefaultDuration ? applyDefaultDuration(action) : action;
+      if (shouldDefaultDuration) defaultedDurationCount += 1;
+      const existingTitle = resolveExistingBlockTitle(action.title || action.matchTitle, context);
+      if (existingTitle && !userRequestsExtraInstance(userText)) {
+        sanitized.push({
+          ...actionWithTiming,
+          type: "move_block",
+          title: "",
+          matchTitle: existingTitle,
+        });
+        continue;
+      }
+
+      sanitized.push(actionWithTiming);
+      continue;
+    }
+
+    if (action.type === "move_block") {
+      const shouldDefaultDuration = !actionHasConcreteTiming(userText, action) && actionHasStartMention(userText, action);
+      if (!actionHasConcreteTiming(userText, action) && !shouldDefaultDuration) {
+        droppedReason = "missing-time-range";
+        continue;
+      }
+
+      const actionWithTiming = shouldDefaultDuration ? applyDefaultDuration(action) : action;
+      if (shouldDefaultDuration) defaultedDurationCount += 1;
+      const existingTitle = resolveExistingBlockTitle(action.matchTitle || action.title, context);
+      sanitized.push({
+        ...actionWithTiming,
+        matchTitle: existingTitle || action.matchTitle,
+      });
+      continue;
+    }
+
+    if (action.type === "remove_block") {
+      const existingTitle = resolveExistingBlockTitle(action.matchTitle || action.title, context);
+      const matchTitle = existingTitle || action.matchTitle;
+      if (!textMentionsExistingTitle(userText, matchTitle, context)) {
+        droppedReason = "vague";
+        continue;
+      }
+
+      sanitized.push({
+        ...action,
+        matchTitle,
+      });
+      continue;
+    }
+
+    sanitized.push(action);
+  }
+
+  if (sanitized.length > 0) {
+    const merged = mergeSequentialFallbackActions(userText, sanitized);
+    defaultedDurationCount += merged.defaultedDurationCount;
+    return {
+      cleanedText: appendDefaultDurationNotice(cleanedText, defaultedDurationCount),
+      actions: merged.actions,
+    };
+  }
+
+  return {
+    cleanedText: buildActionClarificationText(userText, droppedReason) || cleanedText,
+    actions: [],
+  };
+}
+
 function buildPreparedActionText(actions) {
   const safeActions = Array.isArray(actions) ? actions : [];
   if (safeActions.length === 0) return "";
@@ -254,18 +788,29 @@ function buildPreparedActionText(actions) {
   return `已准备 ${safeActions.length} 项日程调整。`;
 }
 
-function reconcileScheduleActionOutput({ inputMessages, cleanedText, actions }) {
+function reconcileScheduleActionOutput({ inputMessages, context, cleanedText, actions }) {
   const safeActions = Array.isArray(actions) ? actions : [];
 
   if (safeActions.length > 0) {
+    const sanitized = sanitizeScheduleActions({
+      inputMessages,
+      context,
+      cleanedText,
+      actions: safeActions,
+    });
+
+    if (sanitized.actions.length === 0) {
+      return sanitized;
+    }
+
     if (!cleanedText || shouldReplaceClarificationText(cleanedText)) {
       return {
-        cleanedText: buildPreparedActionText(safeActions) || cleanedText,
-        actions: safeActions,
+        cleanedText: buildPreparedActionText(sanitized.actions) || sanitized.cleanedText || cleanedText,
+        actions: sanitized.actions,
       };
     }
 
-    return { cleanedText, actions: safeActions };
+    return { cleanedText: sanitized.cleanedText || cleanedText, actions: sanitized.actions };
   }
 
   const derived = deriveLocalAddActionsFromUserText(inputMessages);
@@ -291,7 +836,7 @@ function buildActionExtractionMessages({ inputMessages, assistantText, context }
     {
       role: "system",
       content:
-        "Convert schedule-editing intent into strict JSON only. Output only {\"actions\":[...]} with supported action types add_task_block, move_block, remove_block. Use HH:MM 24-hour time. Use exact existing task titles for matchTitle when moving or removing. If the user clearly wants direct schedule changes, prefer actionable JSON instead of returning an empty list. Chinese examples like '把复习安排到19:00到19:30' are enough information: use '复习' as the title. If there is not enough information for a safe direct change, output {\"actions\":[]}.",
+        "Convert schedule-editing intent into strict JSON only. Output only {\"actions\":[...]} with supported action types add_task_block, move_block, remove_block. Use HH:MM 24-hour time. Normalize casual time expressions, including Chinese numerals and punctuation variants such as 八点20, 8：三十, 九点;40, 七点半, noon, and 3pm. Use exact existing task titles for matchTitle when moving or removing. If the user gives a new time for a title already present in Current schedule blocks, use move_block unless they clearly ask to add another/new extra instance. Use add_task_block for genuinely new items. Map aliases to existing exact titles when possible: code/coding/code block -> 写代码, vocab/words -> 背单词, math review/math -> 复习数学, class/course -> 课程. If the user clearly wants direct schedule changes, prefer actionable JSON instead of returning an empty list. Chinese examples like '把复习安排到19:00到19:30' are enough information: use '复习' as the title. For sequential multi-event wording, a later event start can be used as the previous event's end boundary. If a direct add or move request has a clear item and start time but no end time or duration, default it to a 30-minute block. If the request is vague planning advice without both a concrete item and concrete timing, output {\"actions\":[]}. Examples with no action: 安排一下, 晚上安排点东西, 明天学习一下, I need to study tomorrow, move it later, delete that. If there is not enough information for a safe direct change, output {\"actions\":[]}.",
     },
     {
       role: "user",
@@ -697,6 +1242,7 @@ async function generateChatReply({ messages, context }) {
 
   ({ cleanedText, actions } = reconcileScheduleActionOutput({
     inputMessages,
+    context,
     cleanedText,
     actions,
   }));
@@ -775,6 +1321,7 @@ async function generateChatReplyStream({ messages, context, onDelta, onMeta }) {
 
   ({ cleanedText, actions } = reconcileScheduleActionOutput({
     inputMessages,
+    context,
     cleanedText,
     actions,
   }));

@@ -35,7 +35,6 @@ const DEFAULT_SCHEDULE_VIEW_PREFS = {
   dayZoom: 1,
   weekZoom: 1,
   scheduleSidebarCollapsed: false,
-  calendarPanelCollapsed: false,
 };
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const WEEKDAY_META = {
@@ -47,18 +46,6 @@ const WEEKDAY_META = {
   5: { short: "五", full: "周五" },
   6: { short: "六", full: "周六" },
 };
-const SCHEDULE_SIDEBAR_SECTIONS = [
-  {
-    key: "calendarPanelCollapsed",
-    cardId: "scheduleSectionCalendar",
-    bodyId: "scheduleSectionCalendarBody",
-    buttonId: "btnToggleScheduleSectionCalendar",
-    collapsedText: "+",
-    expandedText: "-",
-    collapsedTitle: "展开日历",
-    expandedTitle: "收起日历",
-  },
-];
 let scheduleHydrationPromise = null;
 let scheduleUndoTimer = null;
 
@@ -222,7 +209,6 @@ function normalizeScheduleViewPrefs(value) {
     dayZoom: clampNumber(raw.dayZoom, DEFAULT_SCHEDULE_VIEW_PREFS.dayZoom, 0.75, 2.4),
     weekZoom: clampNumber(raw.weekZoom, DEFAULT_SCHEDULE_VIEW_PREFS.weekZoom, 0.7, 2.6),
     scheduleSidebarCollapsed: Boolean(raw.scheduleSidebarCollapsed),
-    calendarPanelCollapsed: Boolean(raw.calendarPanelCollapsed),
   };
 }
 
@@ -238,35 +224,15 @@ function renderShellChrome() {
 
   const scheduleButton = $("btnScheduleSidebarCollapse");
   if (scheduleButton) {
-    scheduleButton.textContent = scheduleSidebarCollapsed ? "显示面板" : "隐藏面板";
-    scheduleButton.title = scheduleSidebarCollapsed ? "显示规划面板" : "隐藏规划面板";
+    scheduleButton.textContent = scheduleSidebarCollapsed ? "展开日历" : "收起日历";
+    scheduleButton.title = scheduleSidebarCollapsed ? "展开左侧日历" : "收起左侧日历";
     scheduleButton.setAttribute("aria-expanded", String(!scheduleSidebarCollapsed));
     scheduleButton.classList.toggle("active", scheduleSidebarCollapsed);
   }
-
-  SCHEDULE_SIDEBAR_SECTIONS.forEach((section) => {
-    const collapsed = Boolean(state.scheduleViewPrefs[section.key]);
-    $(section.cardId)?.classList.toggle("collapsed", collapsed);
-    $(section.bodyId)?.classList.toggle("hidden", collapsed);
-
-    const button = $(section.buttonId);
-    if (!button) return;
-    button.textContent = collapsed ? section.collapsedText : section.expandedText;
-    button.title = collapsed ? section.collapsedTitle : section.expandedTitle;
-    button.setAttribute("aria-label", button.title);
-    button.setAttribute("aria-expanded", String(!collapsed));
-  });
 }
 
 function setScheduleSidebarCollapsed(nextCollapsed) {
   state.scheduleViewPrefs.scheduleSidebarCollapsed = Boolean(nextCollapsed);
-  persistScheduleViewPrefs();
-  renderShellChrome();
-}
-
-function setScheduleSidebarSectionCollapsed(sectionKey, nextCollapsed) {
-  if (!Object.prototype.hasOwnProperty.call(state.scheduleViewPrefs, sectionKey)) return;
-  state.scheduleViewPrefs[sectionKey] = Boolean(nextCollapsed);
   persistScheduleViewPrefs();
   renderShellChrome();
 }
@@ -2479,11 +2445,6 @@ function hookWorkspaceChrome() {
   $("btnScheduleSidebarCollapse")?.addEventListener("click", () =>
     setScheduleSidebarCollapsed(!state.scheduleViewPrefs.scheduleSidebarCollapsed)
   );
-  SCHEDULE_SIDEBAR_SECTIONS.forEach((section) => {
-    $(section.buttonId)?.addEventListener("click", () =>
-      setScheduleSidebarSectionCollapsed(section.key, !state.scheduleViewPrefs[section.key])
-    );
-  });
   $("aiConfigForm")?.addEventListener("submit", (event) => saveAiConfigFromForm(event));
   $("btnScheduleToday")?.addEventListener("click", () => updatePlanDateValue(todayInputValue(), { dispatchChange: true }));
   $("btnSchedulePrev")?.addEventListener("click", () => shiftSelectedScheduleDate(-1));

@@ -278,8 +278,8 @@ function findDuplicateTitleBlocks(blocks, title) {
   );
 }
 
-function findTaskMatchDiagnostics(blocks, matchTitle) {
-  const taskBlocks = blocks.filter((block) => block.type === "task");
+function findEditableBlockMatchDiagnostics(blocks, matchTitle) {
+  const editableBlocks = blocks.filter((block) => block.type === "task" || block.type === "fixed");
   const needle = normalizeTitle(matchTitle);
 
   if (!needle) {
@@ -289,9 +289,9 @@ function findTaskMatchDiagnostics(blocks, matchTitle) {
     };
   }
 
-  const exactMatches = taskBlocks.filter((block) => normalizeTitle(block.title) === needle);
+  const exactMatches = editableBlocks.filter((block) => normalizeTitle(block.title) === needle);
   const exactMatchIds = new Set(exactMatches.map((block) => block.runtimeId));
-  const fuzzyMatches = taskBlocks.filter(
+  const fuzzyMatches = editableBlocks.filter(
     (block) =>
       !exactMatchIds.has(block.runtimeId) && normalizeTitle(block.title).includes(needle)
   );
@@ -303,11 +303,17 @@ function findTaskMatchDiagnostics(blocks, matchTitle) {
 }
 
 function findConflictingBlocks(blocks, candidate, excludeRuntimeId) {
+  const candidateOccupied = occupiedRangeForBlock(candidate);
   return blocks
     .filter((block) => block.runtimeId !== excludeRuntimeId)
     .filter((block) => {
       const occupied = occupiedRangeForBlock(block);
-      return intervalsOverlap(candidate.startMin, candidate.endMin, occupied.startMin, occupied.endMin);
+      return intervalsOverlap(
+        candidateOccupied.startMin,
+        candidateOccupied.endMin,
+        occupied.startMin,
+        occupied.endMin
+      );
     })
     .map((block) => makeConflictSummary(block));
 }
@@ -382,7 +388,7 @@ function buildStrictMatchSkipResult(index, action, verb, fuzzyMatches) {
         }
       : {};
 
-  return makeResult(index, action, "skipped", `未找到可${verb}的任务：“${action.matchTitle}”`, extra);
+  return makeResult(index, action, "skipped", `未找到可${verb}的日程：“${action.matchTitle}”`, extra);
 }
 
 function previewAddAction(item, workingBlocks, context) {
@@ -437,13 +443,13 @@ function previewAddAction(item, workingBlocks, context) {
 
 function previewMoveAction(item, workingBlocks, context) {
   const { action, index } = item;
-  const { exactMatches, fuzzyMatches } = findTaskMatchDiagnostics(workingBlocks, action.matchTitle);
+  const { exactMatches, fuzzyMatches } = findEditableBlockMatchDiagnostics(workingBlocks, action.matchTitle);
   if (exactMatches.length === 0) {
     return buildStrictMatchSkipResult(index, action, "移动", fuzzyMatches);
   }
 
   if (exactMatches.length > 1) {
-    return makeResult(index, action, "ambiguous", `“${action.matchTitle}”命中多个任务，未执行移动`, {
+    return makeResult(index, action, "ambiguous", `“${action.matchTitle}”命中多个日程，未执行移动`, {
       matchedBlocks: exactMatches.map((block) => summarizeScheduleBlock(block)),
     });
   }
@@ -451,7 +457,7 @@ function previewMoveAction(item, workingBlocks, context) {
   const target = exactMatches[0];
   const range = ensureActionRangeWithinDay(action, context.dayStartMin, context.dayEndMin);
   if (!range.ok) {
-    return makeResult(index, action, "invalid", `移动任务失败: ${range.reason}`, {
+    return makeResult(index, action, "invalid", `移动日程失败: ${range.reason}`, {
       matchedBlocks: [summarizeScheduleBlock(target)],
     });
   }
@@ -461,8 +467,8 @@ function previewMoveAction(item, workingBlocks, context) {
     ...target,
     startMin: range.startMin,
     endMin: range.endMin,
-    blockedStartMin: range.startMin,
-    blockedEndMin: range.endMin,
+    blockedStartMin: target.type === "fixed" ? range.startMin - (target.bufferMin || 0) : range.startMin,
+    blockedEndMin: target.type === "fixed" ? range.endMin + (target.bufferMin || 0) : range.endMin,
     manual: true,
   };
   const candidateBlocks = workingBlocks.map((block) =>
@@ -472,23 +478,19 @@ function previewMoveAction(item, workingBlocks, context) {
   if (!candidateValidation.ok) {
     return makeResult(index, action, candidateValidation.status, `移动“${target.title}”后会与现有日程冲突`, {
       matchedBlocks: [before],
-      conflictingBlocks: findConflictingBlocks(
-        workingBlocks,
-        { type: "task", startMin: range.startMin, endMin: range.endMin },
-        target.runtimeId
-      ),
+      conflictingBlocks: findConflictingBlocks(workingBlocks, updatedBlock, target.runtimeId),
       scheduleIssues: candidateValidation.blockingIssues,
     });
   }
 
   target.startMin = range.startMin;
   target.endMin = range.endMin;
-  target.blockedStartMin = range.startMin;
-  target.blockedEndMin = range.endMin;
+  target.blockedStartMin = target.type === "fixed" ? range.startMin - (target.bufferMin || 0) : range.startMin;
+  target.blockedEndMin = target.type === "fixed" ? range.endMin + (target.bufferMin || 0) : range.endMin;
   target.manual = true;
   sortBlocksByTime(workingBlocks);
 
-  return makeResult(index, action, "applied", `已预演移动任务“${target.title}”`, {
+  return makeResult(index, action, "applied", `已预演移动日程“${target.title}”`, {
     matchedBlocks: [before],
     updatedBlock: summarizeScheduleBlock(target),
   });
@@ -496,13 +498,13 @@ function previewMoveAction(item, workingBlocks, context) {
 
 function previewRemoveAction(item, workingBlocks) {
   const { action, index } = item;
-  const { exactMatches, fuzzyMatches } = findTaskMatchDiagnostics(workingBlocks, action.matchTitle);
+  const { exactMatches, fuzzyMatches } = findEditableBlockMatchDiagnostics(workingBlocks, action.matchTitle);
   if (exactMatches.length === 0) {
     return buildStrictMatchSkipResult(index, action, "删除", fuzzyMatches);
   }
 
   if (exactMatches.length > 1) {
-    return makeResult(index, action, "ambiguous", `“${action.matchTitle}”命中多个任务，未执行删除`, {
+    return makeResult(index, action, "ambiguous", `“${action.matchTitle}”命中多个日程，未执行删除`, {
       matchedBlocks: exactMatches.map((block) => summarizeScheduleBlock(block)),
     });
   }
@@ -512,7 +514,7 @@ function previewRemoveAction(item, workingBlocks) {
   const nextBlocks = workingBlocks.filter((block) => block.runtimeId !== target.runtimeId);
   workingBlocks.splice(0, workingBlocks.length, ...nextBlocks);
 
-  return makeResult(index, action, "applied", `已预演删除任务“${target.title}”`, {
+  return makeResult(index, action, "applied", `已预演删除日程“${target.title}”`, {
     removedBlock,
   });
 }

@@ -127,6 +127,44 @@ test("previewScheduleActions enforces exact matching for move_block", async (t) 
     assert.equal(result.updatedBlock.end, "16:00");
   });
 
+  await t.test("moves a uniquely exact-matched fixed block", () => {
+    const preview = previewScheduleActions(
+      buildRequest({
+        blocks: [
+          { type: "fixed", title: "Class", start: "13:00", end: "14:00", bufferMin: 15 },
+          { type: "task", title: "Deep Work", start: "10:00", end: "11:00" },
+        ],
+        actions: [{ type: "move_block", matchTitle: "Class", start: "15:00", end: "16:00" }],
+      })
+    );
+
+    const result = findResult(preview, 0);
+    assert.equal(result.status, "applied");
+    assert.equal(result.updatedBlock.type, "fixed");
+    assert.equal(result.updatedBlock.start, "15:00");
+    assert.equal(result.updatedBlock.end, "16:00");
+    assert.equal(result.updatedBlock.bufferMin, 15);
+    assert.ok(preview.nextSchedule.blocks.some((block) => block.title === "Class" && block.start === "15:00"));
+  });
+
+  await t.test("checks moved fixed-block buffer conflicts", () => {
+    const preview = previewScheduleActions(
+      buildRequest({
+        blocks: [
+          { type: "fixed", title: "Class", start: "13:00", end: "14:00", bufferMin: 15 },
+          { type: "task", title: "Deep Work", start: "14:20", end: "15:00" },
+        ],
+        actions: [{ type: "move_block", matchTitle: "Class", start: "13:30", end: "14:15" }],
+      })
+    );
+
+    const result = findResult(preview, 0);
+    assert.equal(result.status, "conflict");
+    assert.equal(result.conflictingBlocks.length, 1);
+    assert.equal(result.conflictingBlocks[0].title, "Deep Work");
+    assert.ok(result.scheduleIssues.some((issue) => issue.code === "TASK_CONFLICTS_FIXED"));
+  });
+
   await t.test("returns skipped on zero exact matches", () => {
     const preview = previewScheduleActions(
       buildRequest({
@@ -203,6 +241,24 @@ test("previewScheduleActions enforces exact matching for remove_block", async (t
     assert.equal(result.status, "applied");
     assert.equal(result.removedBlock.title, "Email");
     assert.ok(preview.nextSchedule.blocks.every((block) => block.title !== "Email"));
+  });
+
+  await t.test("removes a uniquely exact-matched fixed block", () => {
+    const preview = previewScheduleActions(
+      buildRequest({
+        blocks: [
+          { type: "fixed", title: "Class", start: "13:00", end: "14:00", bufferMin: 15 },
+          { type: "task", title: "Deep Work", start: "10:00", end: "11:00" },
+        ],
+        actions: [{ type: "remove_block", matchTitle: "Class" }],
+      })
+    );
+
+    const result = findResult(preview, 0);
+    assert.equal(result.status, "applied");
+    assert.equal(result.removedBlock.type, "fixed");
+    assert.equal(result.removedBlock.title, "Class");
+    assert.ok(preview.nextSchedule.blocks.every((block) => block.title !== "Class"));
   });
 
   await t.test("returns skipped on zero exact matches", () => {
