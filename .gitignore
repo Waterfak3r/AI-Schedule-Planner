@@ -10,6 +10,9 @@ node_modules/
 release/
 deliverables/exe/
 ai-schedule-planner-upload-ready/
+bin/
+obj/
+desktop-avalonia/publish/
 
 # Runtime state and local data
 *.db
