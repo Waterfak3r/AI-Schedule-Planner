@@ -44,6 +44,9 @@ public sealed class ScheduleAction
     public string End { get; set; } = "";
     public int? DurationMinutes { get; set; }
     public string Category { get; set; } = "other";
+    public string TimeConfidence { get; set; } = "";
+    public bool? NeedsConfirmation { get; set; }
+    public List<string> Assumptions { get; set; } = [];
 }
 
 public sealed class ScheduleActionResult
@@ -55,6 +58,7 @@ public sealed class ScheduleActionResult
     public ScheduleBlock? UpdatedBlock { get; set; }
     public ScheduleBlock? RemovedBlock { get; set; }
     public List<ScheduleBlock> ConflictingBlocks { get; set; } = [];
+    public List<string> Warnings { get; set; } = [];
 }
 
 public sealed class ScheduleActionPreview

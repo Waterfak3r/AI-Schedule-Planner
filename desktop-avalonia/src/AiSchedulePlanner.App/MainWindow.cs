@@ -523,6 +523,11 @@ public sealed class MainWindow : Window
         ApplySidebarLayout();
         UpdateNavigationVisualState();
         RebuildSchedules();
+        if (viewMode == ScheduleViewMode.Month)
+        {
+            EnsureMonthReviewOverflow();
+            RebuildSchedules();
+        }
 
         ScheduleBlock? reviewBlock = null;
         if (selectBlock || markComplete)
@@ -565,6 +570,29 @@ public sealed class MainWindow : Window
         RenderActivePage();
     }
 
+    private void EnsureMonthReviewOverflow()
+    {
+        var schedule = BuildScheduleForDate(_focusDate).Clone();
+        schedule.Blocks.RemoveAll(block => block.RuntimeId.StartsWith("review-month-", StringComparison.OrdinalIgnoreCase));
+        for (var index = 0; index < 6; index++)
+        {
+            var start = 8 * 60 + index * 35;
+            schedule.Blocks.Add(new ScheduleBlock
+            {
+                RuntimeId = $"review-month-{index}",
+                Type = ScheduleBlockType.Task,
+                Title = $"月视图检查 {index + 1}",
+                Category = index % 2 == 0 ? "study" : "code",
+                StartMin = start,
+                EndMin = start + 30,
+                Editable = true
+            });
+        }
+
+        schedule.Blocks = [.. schedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
+        _state.DayOverrides[DateKey(_focusDate)] = schedule;
+    }
+
     private string BuildUiAuditReport(int width, int height, string scenario)
     {
         var visibleControls = this.GetVisualDescendants().OfType<Control>().Where(control => control.IsVisible).ToList();
@@ -586,6 +614,11 @@ public sealed class MainWindow : Window
         var legacyScheduleTexts = visibleTexts
             .Concat(buttonLabels)
             .Where(text => text.Contains("Schedule", StringComparison.OrdinalIgnoreCase))
+            .Distinct()
+            .ToList();
+        var tutorialScheduleTexts = visibleTexts
+            .Concat(buttonLabels)
+            .Where(IsScheduleTutorialText)
             .Distinct()
             .ToList();
         var iconAlignmentRows = BuildIconButtonAlignmentRows(visibleControls.OfType<Button>());
@@ -618,6 +651,8 @@ public sealed class MainWindow : Window
         report.AppendLine($"has_calendar_toggle: {buttonLabels.Contains("收起日历") || buttonLabels.Contains("展开日历")}");
         report.AppendLine($"has_legacy_schedule_text: {legacyScheduleTexts.Count > 0}");
         report.AppendLine($"legacy_schedule_texts: {string.Join(" | ", legacyScheduleTexts)}");
+        report.AppendLine($"has_schedule_tutorial_text: {tutorialScheduleTexts.Count > 0}");
+        report.AppendLine($"schedule_tutorial_texts: {string.Join(" | ", tutorialScheduleTexts)}");
         report.AppendLine("icon_button_alignment:");
         foreach (var row in iconAlignmentRows)
         {
@@ -628,8 +663,96 @@ public sealed class MainWindow : Window
         {
             report.AppendLine($"- h={viewer.HorizontalScrollBarVisibility}, v={viewer.VerticalScrollBarVisibility}, viewport={viewer.Viewport.Width:0.##}x{viewer.Viewport.Height:0.##}, extent={viewer.Extent.Width:0.##}x{viewer.Extent.Height:0.##}");
         }
+        foreach (var row in BuildWeekHeaderAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
+        foreach (var row in BuildMonthAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildWeekHeaderAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_scheduleView != ScheduleViewMode.Week) return [];
+
+        var rows = new List<string>();
+        var header = visibleControls.FirstOrDefault(control => Equals(control.Tag, "week-header-canvas"));
+        var body = visibleControls.FirstOrDefault(control => Equals(control.Tag, "week-body-canvas"));
+        var scroller = visibleControls.OfType<ScrollViewer>().FirstOrDefault(viewer => Equals(viewer.Tag, "week-body-scroller"));
+        var headerInsideScroller = header?.GetVisualAncestors().OfType<ScrollViewer>().Any() == true;
+        var bodyInsideScroller = body?.GetVisualAncestors().OfType<ScrollViewer>().Any() == true;
+
+        rows.Add($"week_header_present: {header is not null}");
+        rows.Add($"week_body_present: {body is not null}");
+        rows.Add($"week_body_scroller_present: {scroller is not null}");
+        rows.Add($"week_header_inside_scrollviewer: {headerInsideScroller}");
+        rows.Add($"week_body_inside_scrollviewer: {bodyInsideScroller}");
+
+        if (header is null || scroller is null)
+        {
+            return rows;
+        }
+
+        var before = header.TranslatePoint(new Point(0, 0), this);
+        var originalOffset = scroller.Offset;
+        var maxScroll = Math.Max(0, scroller.Extent.Height - scroller.Viewport.Height);
+        scroller.Offset = new Vector(scroller.Offset.X, Math.Min(240, maxScroll));
+        UpdateLayout();
+        var after = header.TranslatePoint(new Point(0, 0), this);
+        scroller.Offset = originalOffset;
+        UpdateLayout();
+
+        var deltaY = before is null || after is null ? double.NaN : after.Value.Y - before.Value.Y;
+        rows.Add($"week_header_sticky_delta_y_after_scroll: {deltaY:0.##}");
+        rows.Add($"week_body_horizontal_scrollbar: {scroller.HorizontalScrollBarVisibility}");
+        rows.Add($"week_body_vertical_scrollbar: {scroller.VerticalScrollBarVisibility}");
+        return rows;
+    }
+
+    private IReadOnlyList<string> BuildMonthAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_scheduleView != ScheduleViewMode.Month) return [];
+
+        var monthGrid = visibleControls.FirstOrDefault(control => Equals(control.Tag, "month-grid"));
+        var dayCellControls = visibleControls
+            .OfType<Border>()
+            .Where(control => control.Tag is DateOnly)
+            .ToList();
+        var dayCells = dayCellControls.Count;
+        var focusedCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == _focusDate);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var todayCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == today);
+        var chips = visibleControls
+            .Where(control => control.Tag is string tag && tag.StartsWith("month-chip:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var moreButtons = visibleControls
+            .Where(control => control.Tag is string tag && tag.StartsWith("month-more:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return
+        [
+            $"month_grid_present: {monthGrid is not null}",
+            $"month_day_cell_count: {dayCells}",
+            $"month_focused_cell_present: {focusedCellPresent}",
+            $"month_today_cell_present: {todayCellPresent}",
+            $"month_event_chip_count: {chips.Count}",
+            $"month_more_button_count: {moreButtons.Count}",
+            $"month_min_chip_height: {(chips.Count == 0 ? 0 : chips.Min(control => control.Bounds.Height)):0.##}"
+        ];
+    }
+
+    private static bool IsScheduleTutorialText(string text)
+    {
+        return text.Contains("拖动空白", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Ctrl 点按", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("右键选中", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("单击日期查看", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("拖动事件", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("快捷键", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ControlText(object? content)
@@ -676,13 +799,17 @@ public sealed class MainWindow : Window
     private void RebuildSchedules()
     {
         var request = BuildScheduleRequest(_focusDate, _state.Tasks);
-        _daySchedule = BuildScheduleForDate(_focusDate);
         _weekPlan = ApplyWeekOverrides(_scheduleEngine.BuildWeek(request));
+        _daySchedule = _weekPlan.Days.FirstOrDefault(day => day.Date == _focusDate)?.Schedule.Clone()
+            ?? BuildScheduleForDate(_focusDate);
     }
 
     private DaySchedule BuildScheduleForDate(DateOnly date)
     {
-        return ApplyDayOverride(_scheduleEngine.BuildDay(BuildScheduleRequest(date, _state.Tasks)));
+        var week = _scheduleEngine.BuildWeek(BuildScheduleRequest(date, _state.Tasks));
+        var schedule = week.Days.FirstOrDefault(day => day.Date == date)?.Schedule
+            ?? _scheduleEngine.BuildDay(BuildScheduleRequest(date, _state.Tasks));
+        return ApplyDayOverride(schedule);
     }
 
     private ScheduleBuildRequest BuildScheduleRequest(DateOnly date, List<TaskRule> tasks)
@@ -1666,7 +1793,7 @@ public sealed class MainWindow : Window
             _chatMessages[^1] = new AiChatMessage
             {
                 Role = "assistant",
-                Content = result.Text
+                Content = SanitizeAiText(result.Text, _aiSettings)
             };
             _pendingActions.Clear();
             var targetDate = ScheduleActionDateResolver.ResolveSingleExplicitTargetDate(_focusDate, result.Actions);
@@ -1689,7 +1816,7 @@ public sealed class MainWindow : Window
             _chatMessages[^1] = new AiChatMessage
             {
                 Role = "assistant",
-                Content = $"请求失败：{ex.Message}"
+                Content = $"请求失败：{SanitizeAiDiagnostic(ex.Message, _aiSettings)}"
             };
             _pendingActions.Clear();
             SetStatus("AI 对话失败，请检查 API 设置或网络。", error: true);
@@ -2078,7 +2205,7 @@ public sealed class MainWindow : Window
         text.Children.Add(Text($"已选中 {selected.Count} 个日程", 13, "#1d4ed8", FontWeight.SemiBold));
         text.Children.Add(Text(editableCount == 0
             ? "选中的日程不可批量编辑。"
-            : $"范围 {range}。拖动可批量移动，Ctrl 点按增减选择。",
+            : $"范围 {range}",
             12,
             editableCount == 0 ? "#64748b" : "#334155"));
 
@@ -2767,7 +2894,8 @@ public sealed class MainWindow : Window
         }
 
         root.Children.Add(Text($"已选中 {selected.Count} 个", 18, "#111827", FontWeight.SemiBold));
-        root.Children.Add(Text("拖动任意选中日程可批量移动，Ctrl 点按增减选择。", 12, "#64748b"));
+        var selectedRange = $"{TimeText.ToTime(selected.Min(block => block.StartMin))}-{TimeText.ToTime(selected.Max(block => block.EndMin))}";
+        root.Children.Add(Text($"范围 {selectedRange}", 12, "#64748b"));
 
         var buttons = BuildSelectionActionButtons(selected.Any(block => block.Editable), compact: true);
         var clear = Button("取消选择", (_, _) =>
@@ -2806,9 +2934,9 @@ public sealed class MainWindow : Window
     {
         return _scheduleView switch
         {
-            ScheduleViewMode.Month => "单击日期查看当天日程，拖动事件可改到其他日期。",
-            ScheduleViewMode.Week => "拖动空白创建时间段，拖动事件可改时间或日期。",
-            _ => "拖动空白可框选多个日程，右键选中项可批量移动或删除。"
+            ScheduleViewMode.Month => $"选中日期 {_focusDate:MM-dd}",
+            ScheduleViewMode.Week => "未选中日程",
+            _ => "未选中日程"
         };
     }
 
@@ -3042,6 +3170,7 @@ public sealed class MainWindow : Window
         _dayCanvas.PointerPressed += BeginBoxSelection;
         _dayCanvas.PointerMoved += UpdateBoxSelection;
         _dayCanvas.PointerReleased += FinishBoxSelection;
+        _dayCanvas.PointerCaptureLost += CancelBoxSelection;
         _dayCanvas.DoubleTapped += async (_, args) =>
         {
             if (args.Source is Canvas)
@@ -3133,23 +3262,20 @@ public sealed class MainWindow : Window
     {
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(block);
-        var color = block.Type == ScheduleBlockType.Fixed ? "#dbeafe" : block.Category switch
-        {
-            "study" => "#dcfce7",
-            "code" => "#ede9fe",
-            "workout" => "#ffedd5",
-            _ => "#f1f5f9"
-        };
+        var eventWidth = DayEventWidthForLayout(layout);
+        var ultraNarrow = eventWidth < 96;
+        var compact = block.DurationMin * pixelsPerMinute < 44 || eventWidth < 132;
+        var accent = done ? "#9aa0a6" : MonthEventAccent(block);
         var selected = _selectedRuntimeIds.Contains(block.RuntimeId);
         var border = new Border
         {
             Tag = block.RuntimeId,
-            Background = Brush(color),
-            BorderBrush = Brush(selected ? "#2563eb" : current ? "#ef4444" : "#cbd5e1"),
+            Background = Brush(done ? "#f8fafc" : MonthEventBackground(block)),
+            BorderBrush = Brush(selected ? "#1a73e8" : current ? "#d93025" : "#dbe3ee"),
             BorderThickness = new Thickness(selected || current ? 2 : 1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(10, 6),
-            Width = DayEventWidthForLayout(layout),
+            Padding = ultraNarrow ? new Thickness(5, 3) : compact ? new Thickness(7, 3) : new Thickness(10, 6),
+            Width = eventWidth,
             Opacity = done ? 0.68 : 1,
             Height = Math.Max(32, block.DurationMin * pixelsPerMinute - 4),
             Child = new Grid
@@ -3160,38 +3286,52 @@ public sealed class MainWindow : Window
         ToolTip.SetTip(border, ScheduleBlockTooltip(_focusDate, block, done, current));
         var eventContent = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            ColumnSpacing = 10
+            ColumnDefinitions = new ColumnDefinitions(ultraNarrow ? "Auto,*" : "Auto,Auto,*"),
+            ColumnSpacing = ultraNarrow ? 5 : compact ? 6 : 9
         };
+        var accentStrip = new Border
+        {
+            Width = compact ? 3 : 4,
+            CornerRadius = new CornerRadius(3),
+            Background = Brush(accent),
+            Opacity = done ? 0.58 : 1,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        var completeButtonSize = compact ? 22 : 28;
         var completeButton = new Button
         {
-            Content = CenteredIconText(done ? "✓" : "", 15, done ? "#ffffff" : "#64748b"),
-            Width = 28,
-            Height = 28,
-            MinHeight = 28,
+            Content = CenteredIconText(done ? "✓" : "", compact ? 12 : 15, done ? "#ffffff" : "#64748b"),
+            Width = completeButtonSize,
+            Height = completeButtonSize,
+            MinHeight = completeButtonSize,
             Padding = new Thickness(0),
             Background = Brush(done ? "#22c55e" : "#ffffff"),
             Foreground = Brush(done ? "#ffffff" : "#64748b"),
             BorderBrush = Brush(done ? "#16a34a" : "#cbd5e1"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(14),
+            CornerRadius = new CornerRadius(completeButtonSize / 2d),
             HorizontalContentAlignment = HorizontalAlignment.Center,
             VerticalContentAlignment = VerticalAlignment.Center
         };
         completeButton.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
-        var textStack = new StackPanel { Spacing = 2 };
-        var timeLabel = Text($"{block.Start}-{block.End}", 11, done ? "#64748b" : "#334155", FontWeight.SemiBold);
+        var textStack = new StackPanel { Spacing = compact ? 0 : 2 };
+        var timeLabel = Text($"{block.Start}-{block.End}", compact ? 10 : 11, done ? "#64748b" : "#334155", FontWeight.SemiBold);
         timeLabel.TextWrapping = TextWrapping.NoWrap;
         timeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
         textStack.Children.Add(timeLabel);
         var titleSuffix = done ? "（已完成）" : current ? "（进行中）" : "";
-        var titleLabel = Text($"{block.Title}{titleSuffix}", 13, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
+        var titleLabel = Text($"{block.Title}{titleSuffix}", compact ? 12 : 13, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
         titleLabel.TextWrapping = TextWrapping.NoWrap;
         titleLabel.TextTrimming = TextTrimming.CharacterEllipsis;
         textStack.Children.Add(titleLabel);
-        Grid.SetColumn(completeButton, 0);
-        Grid.SetColumn(textStack, 1);
-        eventContent.Children.Add(completeButton);
+        Grid.SetColumn(accentStrip, 0);
+        Grid.SetColumn(textStack, ultraNarrow ? 1 : 2);
+        eventContent.Children.Add(accentStrip);
+        if (!ultraNarrow)
+        {
+            Grid.SetColumn(completeButton, 1);
+            eventContent.Children.Add(completeButton);
+        }
         eventContent.Children.Add(textStack);
 
         var resizeGrip = new Border
@@ -3201,7 +3341,7 @@ public sealed class MainWindow : Window
             CornerRadius = new CornerRadius(3),
             Opacity = block.Editable ? 0.42 : 0,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Margin = layout.LaneCount > 2 ? new Thickness(12, 0, 12, 0) : new Thickness(42, 0, 42, 0),
+            Margin = ultraNarrow ? new Thickness(4, 0, 4, 0) : layout.LaneCount > 2 ? new Thickness(12, 0, 12, 0) : new Thickness(42, 0, 42, 0),
             Cursor = new Cursor(StandardCursorType.SizeNorthSouth)
         };
         resizeGrip.PointerPressed += (_, args) =>
@@ -3291,15 +3431,15 @@ public sealed class MainWindow : Window
             var previewStart = ResolveDayDragStart(args.GetPosition(_dayCanvas));
             if (previewStart == _dragOriginalStart) return;
 
-            var deltaMinutes = previewStart - _dragOriginalStart;
+            var selectedBlocks = SelectedEditableBlocks();
+            var deltaMinutes = ClampGroupMoveDelta(selectedBlocks, previewStart - _dragOriginalStart);
             foreach (var item in _dayCanvas?.Children.OfType<Border>() ?? Enumerable.Empty<Border>())
             {
                 if (item.Tag is not string id || !_selectedRuntimeIds.Contains(id)) continue;
                 var targetBlock = _daySchedule.Blocks.FirstOrDefault(block => block.RuntimeId == id);
                 if (targetBlock is null) continue;
 
-                var targetDuration = targetBlock.DurationMin;
-                var targetStart = Math.Clamp(targetBlock.StartMin + deltaMinutes, 0, TimeText.FullDayEndMin - targetDuration);
+                var targetStart = targetBlock.StartMin + deltaMinutes;
                 Canvas.SetTop(item, topOffset + targetStart * pixelsPerMinute + 2);
                 item.Opacity = 0.86;
             }
@@ -3750,6 +3890,7 @@ public sealed class MainWindow : Window
 
         var grid = new Grid
         {
+            Tag = "month-grid",
             ColumnDefinitions = new ColumnDefinitions("*,*,*,*,*,*,*"),
             RowDefinitions = new RowDefinitions("34," + string.Join(",", Enumerable.Repeat("*", rowCount))),
             ClipToBounds = true
@@ -3821,19 +3962,20 @@ public sealed class MainWindow : Window
     {
         var isToday = date == DateOnly.FromDateTime(DateTime.Today);
         var isFocused = date == _focusDate;
+        var selected = isFocused && !isToday;
         var dateLabel = date.Day == 1 ? $"{date.Month}月{date.Day}日" : date.Day.ToString();
-        var root = new StackPanel { Spacing = 4 };
-        var dayNumber = MonthSingleLineText(dateLabel, 12, isToday ? "#ffffff" : inCurrentMonth ? "#202124" : "#9aa0a6", FontWeight.SemiBold);
+        var root = new StackPanel { Spacing = 3 };
+        var dayNumber = MonthSingleLineText(dateLabel, 12, isToday ? "#ffffff" : selected ? "#1967d2" : inCurrentMonth ? "#202124" : "#9aa0a6", FontWeight.SemiBold);
         dayNumber.HorizontalAlignment = HorizontalAlignment.Center;
         dayNumber.VerticalAlignment = VerticalAlignment.Center;
         var dayBadge = new Border
         {
-            Width = date.Day == 1 ? 54 : 28,
-            Height = 26,
-            CornerRadius = new CornerRadius(13),
-            Background = Brush(isToday ? "#1a73e8" : "#00ffffff"),
-            BorderBrush = Brush(isFocused && !isToday ? "#1a73e8" : "#00ffffff"),
-            BorderThickness = new Thickness(isFocused && !isToday ? 1 : 0),
+            Width = date.Day == 1 ? 50 : 26,
+            Height = 24,
+            CornerRadius = new CornerRadius(12),
+            Background = Brush(isToday ? "#1a73e8" : selected ? "#e8f0fe" : "#00ffffff"),
+            BorderBrush = Brush(selected ? "#1a73e8" : "#00ffffff"),
+            BorderThickness = new Thickness(selected ? 1 : 0),
             Child = dayNumber,
             HorizontalAlignment = HorizontalAlignment.Left
         };
@@ -3856,13 +3998,14 @@ public sealed class MainWindow : Window
         var cell = new Border
         {
             Background = Brush(isFocused ? "#f8fbff" : inCurrentMonth ? "#ffffff" : "#f8fafd"),
-            BorderBrush = Brush(isFocused ? "#1a73e8" : "#dadce0"),
-            BorderThickness = isFocused ? new Thickness(2) : new Thickness(0, 0, 1, 1),
-            Padding = new Thickness(7, 6),
+            BorderBrush = Brush("#dadce0"),
+            BorderThickness = new Thickness(0, 0, 1, 1),
+            Padding = new Thickness(6, 5),
             Tag = date,
             ClipToBounds = true,
             Child = root
         };
+        ToolTip.SetTip(cell, $"{date:yyyy-MM-dd} 周{WeekdayText(date)} · {visibleBlocks.Count} 个日程");
         cell.PointerPressed += (_, args) =>
         {
             if (!args.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
@@ -3894,172 +4037,87 @@ public sealed class MainWindow : Window
     {
         var more = new Border
         {
+            Tag = $"month-more:{date:yyyy-MM-dd}",
             Background = Brush("#00ffffff"),
             BorderBrush = Brush("#00ffffff"),
             BorderThickness = new Thickness(0),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(4, 2),
+            Padding = new Thickness(5, 1),
+            Height = 20,
             Cursor = new Cursor(StandardCursorType.Hand),
-            Child = MonthSingleLineText($"还有 {hiddenCount} 个", 11, "#1a73e8", FontWeight.SemiBold)
+            Child = MonthSingleLineText($"+{hiddenCount} 个", 11, "#1a73e8", FontWeight.SemiBold)
         };
+        ToolTip.SetTip(more, $"{date:yyyy-MM-dd} 还有 {hiddenCount} 个未显示日程");
         more.PointerPressed += (_, args) =>
         {
             if (!args.GetCurrentPoint(more).Properties.IsLeftButtonPressed) return;
             args.Handled = true;
-            _ = ShowMonthDayDetailsAsync(date, schedule);
+            var menu = BuildMonthMoreMenu(date, schedule);
+            more.ContextMenu = menu;
+            menu.Open(more);
         };
         return more;
     }
 
-    private async Task ShowMonthDayDetailsAsync(DateOnly date, DaySchedule schedule)
+    private ContextMenu BuildMonthMoreMenu(DateOnly date, DaySchedule schedule)
     {
         Interlocked.Increment(ref _monthFocusVersion);
         var blocks = schedule.Blocks
             .Where(IsVisibleBlock)
             .OrderBy(block => block.StartMin)
             .ToList();
-
-        var root = new StackPanel
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem
         {
-            Spacing = 12,
-            Margin = new Thickness(18)
-        };
-        var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
-        var title = new StackPanel { Spacing = 3 };
-        title.Children.Add(Text($"{date:yyyy 年 M 月 d 日} 周{WeekdayText(date)}", 20, "#111827", FontWeight.SemiBold));
-        title.Children.Add(Text($"{blocks.Count} 个日程", 12, "#64748b", FontWeight.SemiBold));
-        Grid.SetColumn(title, 0);
-        header.Children.Add(title);
-        var open = Button("打开日视图", (_, _) =>
+            Header = $"{date:yyyy 年 M 月 d 日} 周{WeekdayText(date)} · {blocks.Count} 个日程",
+            IsEnabled = false
+        });
+        menu.Items.Add(new Separator());
+        foreach (var block in blocks.Take(14))
         {
-            if (root.Tag is Window dialog)
+            var done = IsBlockCompleted(block);
+            var current = IsCurrentBlock(date, block);
+            var item = new MenuItem
             {
-                dialog.Close(false);
-            }
-            OpenDayFromMonth(date);
-        }, secondary: true);
-        Grid.SetColumn(open, 1);
-        header.Children.Add(open);
-        root.Children.Add(header);
-
-        if (blocks.Count == 0)
-        {
-            root.Children.Add(RulesEmptyState("当天没有日程。"));
-        }
-        else
-        {
-            foreach (var block in blocks)
-            {
-                root.Children.Add(BuildMonthDayDetailsRow(date, block, root));
-            }
+                Header = $"{(done ? "✓ " : "")}{block.Start}-{block.End}  {block.Title}",
+                Icon = BuildMonthMenuEventIcon(block, done, current)
+            };
+            ToolTip.SetTip(item, ScheduleBlockTooltip(date, block, done, current));
+            item.Click += async (_, _) => await EditWeekScheduleBlockAsync(date, block);
+            menu.Items.Add(item);
         }
 
-        var actions = new StackPanel
+        if (blocks.Count > 14)
         {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Spacing = 8
-        };
-        var dialogWindow = new Window
-        {
-            Title = $"{date:yyyy-MM-dd} 日程",
-            Width = 480,
-            Height = 560,
-            MinWidth = 420,
-            MinHeight = 420,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Background = Brush("#f8fafc")
-        };
-        root.Tag = dialogWindow;
-        actions.Children.Add(Button("新建", async (_, _) =>
-        {
-            dialogWindow.Close(false);
-            await CreateScheduleBlockOnDateAsync(date);
-        }));
-        actions.Children.Add(Button("关闭", (_, _) => dialogWindow.Close(false), secondary: true));
-        root.Children.Add(actions);
-        dialogWindow.Content = new ScrollViewer
-        {
-            Content = root,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
-        };
+            var overflow = new MenuItem
+            {
+                Header = $"还有 {blocks.Count - 14} 个，打开日视图查看"
+            };
+            overflow.Click += (_, _) => OpenDayFromMonth(date);
+            menu.Items.Add(overflow);
+        }
 
-        await dialogWindow.ShowDialog<bool>(this);
-        RenderActivePage();
+        menu.Items.Add(new Separator());
+        var openDay = new MenuItem { Header = "打开日视图" };
+        openDay.Click += (_, _) => OpenDayFromMonth(date);
+        var create = new MenuItem { Header = "新建日程" };
+        create.Click += async (_, _) => await CreateScheduleBlockOnDateAsync(date);
+        menu.Items.Add(openDay);
+        menu.Items.Add(create);
+        return menu;
     }
 
-    private Control BuildMonthDayDetailsRow(DateOnly date, ScheduleBlock block, Control dialogRoot)
+    private static Control BuildMonthMenuEventIcon(ScheduleBlock block, bool done, bool current)
     {
-        var done = IsBlockCompleted(block);
-        var accent = MonthEventAccent(block);
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
-            ColumnSpacing = 10
-        };
-        grid.Children.Add(new Border
-        {
-            Width = 4,
-            Background = Brush(done ? "#cbd5e1" : accent),
-            CornerRadius = new CornerRadius(3)
-        });
-
-        var text = new StackPanel { Spacing = 2 };
-        text.Children.Add(Text($"{block.Start}-{block.End}", 12, done ? "#94a3b8" : "#475569", FontWeight.SemiBold));
-        text.Children.Add(Text(block.Title, 14, done ? "#64748b" : "#111827", FontWeight.SemiBold));
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(text);
-
-        var actions = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Spacing = 6
-        };
-        var complete = Button(done ? "取消" : "完成", async (_, _) =>
-        {
-            if (dialogRoot.Tag is Window dialog)
-            {
-                dialog.Close(false);
-            }
-            await ToggleBlockCompleteAsync(block);
-        }, secondary: true);
-        var edit = Button("编辑", async (_, _) =>
-        {
-            if (dialogRoot.Tag is Window dialog)
-            {
-                dialog.Close(false);
-            }
-            await EditWeekScheduleBlockAsync(date, block);
-        }, secondary: true);
-        var delete = Button("删除", async (_, _) =>
-        {
-            if (dialogRoot.Tag is Window dialog)
-            {
-                dialog.Close(false);
-            }
-            await DeleteBlockOnDateAsync(date, block);
-        }, danger: true);
-        foreach (var button in new[] { complete, edit, delete })
-        {
-            button.Padding = new Thickness(8, 4);
-            button.MinHeight = 28;
-        }
-        actions.Children.Add(complete);
-        actions.Children.Add(edit);
-        actions.Children.Add(delete);
-        Grid.SetColumn(actions, 2);
-        grid.Children.Add(actions);
-
         return new Border
         {
-            Background = Brush(done ? "#f8fafc" : MonthEventBackground(block)),
-            BorderBrush = Brush(done ? "#e2e8f0" : "#dbe3ee"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(10),
-            Child = grid
+            Width = 9,
+            Height = 9,
+            CornerRadius = new CornerRadius(4.5),
+            Background = Brush(done ? "#9aa0a6" : current ? "#d93025" : MonthEventAccent(block)),
+            BorderBrush = Brush(current ? "#991b1b" : "#00ffffff"),
+            BorderThickness = new Thickness(current ? 1 : 0),
+            VerticalAlignment = VerticalAlignment.Center
         };
     }
 
@@ -4104,17 +4162,17 @@ public sealed class MainWindow : Window
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(date, block);
         var accent = MonthEventAccent(block);
-        var label = MonthSingleLineText($"{(done ? "✓ " : "")}{block.Start} {block.Title}", 11, done ? "#5f6368" : "#202124", FontWeight.SemiBold);
+        var label = MonthSingleLineText($"{(done ? "✓ " : "")}{block.Start} {block.Title}", 10.5, done ? "#5f6368" : "#202124", FontWeight.SemiBold);
         label.VerticalAlignment = VerticalAlignment.Center;
         var content = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            ColumnSpacing = 6
+            ColumnSpacing = 4
         };
         var colorStrip = new Border
         {
             Width = 3,
-            Height = 14,
+            Height = 12,
             CornerRadius = new CornerRadius(2),
             Background = Brush(done ? "#9aa0a6" : accent),
             VerticalAlignment = VerticalAlignment.Center
@@ -4126,12 +4184,13 @@ public sealed class MainWindow : Window
 
         var chip = new Border
         {
+            Tag = $"month-chip:{date:yyyy-MM-dd}:{block.RuntimeId}",
             Background = Brush(done ? "#f1f3f4" : MonthEventBackground(block)),
             BorderBrush = Brush(current ? "#d93025" : "#00ffffff"),
             BorderThickness = new Thickness(current ? 1 : 0),
             CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(5, 2),
-            Height = 22,
+            Padding = new Thickness(4, 1),
+            Height = 20,
             Opacity = done ? 0.68 : 1,
             Cursor = new Cursor(StandardCursorType.Hand),
             Child = content
@@ -4169,16 +4228,14 @@ public sealed class MainWindow : Window
         chip.PointerReleased += (_, args) =>
         {
             if (_monthDragBlock is null || args.Pointer.Captured != chip) return;
-            args.Pointer.Capture(null);
-            ClearMonthDropTargetHighlight();
             var targetDate = ResolveMonthDateFromPoint(monthGrid, args.GetPosition(monthGrid));
             var sourceDate = _monthDragSourceDate;
             var runtimeId = _monthDragBlock.RuntimeId;
             var startMin = _monthDragBlock.StartMin;
             var duration = _monthDragBlock.DurationMin;
             var moved = _monthDragMoved;
-            _monthDragBlock = null;
-            _monthDragMoved = false;
+            ClearMonthDragState();
+            args.Pointer.Capture(null);
 
             if (moved && targetDate is not null && targetDate.Value != sourceDate)
             {
@@ -4197,6 +4254,13 @@ public sealed class MainWindow : Window
             }
 
             args.Handled = true;
+        };
+        chip.PointerCaptureLost += (_, _) =>
+        {
+            if (_monthDragBlock is null) return;
+
+            RestoreMonthChipDragVisual(chip, done, current);
+            ClearMonthDragState();
         };
         chip.DoubleTapped += async (_, args) =>
         {
@@ -4220,6 +4284,21 @@ public sealed class MainWindow : Window
         chip.ContextMenu = menu;
 
         return chip;
+    }
+
+    private static void RestoreMonthChipDragVisual(Border chip, bool done, bool current)
+    {
+        chip.Opacity = done ? 0.68 : 1;
+        chip.BorderBrush = Brush(current ? "#d93025" : "#00ffffff");
+        chip.BorderThickness = new Thickness(current ? 1 : 0);
+    }
+
+    private void ClearMonthDragState()
+    {
+        ClearMonthDropTargetHighlight();
+        _monthDragBlock = null;
+        _monthDragSourceDate = default;
+        _monthDragMoved = false;
     }
 
     private static TextBlock MonthSingleLineText(string text, double size, string color, FontWeight weight = FontWeight.Normal)
@@ -4342,9 +4421,11 @@ public sealed class MainWindow : Window
         var dayCount = Math.Max(7, _weekPlan.Days.Count);
         _weekDayWidth = ResolveWeekDayWidth(dayCount);
         var canvasWidth = WeekTimeLabelWidth + dayCount * _weekDayWidth;
-        var canvasHeight = WeekTopOffset + TimeText.FullDayEndMin * WeekPixelsPerMinute + 28;
+        var canvasHeight = TimeText.FullDayEndMin * WeekPixelsPerMinute + 28;
+        var header = BuildWeekHeaderCanvas(canvasWidth);
         var canvas = new Canvas
         {
+            Tag = "week-body-canvas",
             Width = canvasWidth,
             Height = canvasHeight,
             Background = Brush("#ffffff")
@@ -4356,7 +4437,7 @@ public sealed class MainWindow : Window
         canvas.DoubleTapped += async (_, args) =>
         {
             var position = args.GetPosition(canvas);
-            if (position.X < WeekTimeLabelWidth || position.Y < WeekTopOffset) return;
+            if (position.X < WeekTimeLabelWidth) return;
 
             var dayIndex = WeekDayIndexFromX(position.X);
             if (dayIndex is null || dayIndex.Value >= _weekPlan.Days.Count) return;
@@ -4370,12 +4451,12 @@ public sealed class MainWindow : Window
 
         for (var i = 0; i < _weekPlan.Days.Count; i++)
         {
-            AddWeekDayColumn(canvas, _weekPlan.Days[i], i, canvasHeight);
+            AddWeekDayBackground(canvas, _weekPlan.Days[i], i, canvasHeight);
         }
 
         for (var minute = 0; minute <= TimeText.FullDayEndMin; minute += 30)
         {
-            var y = WeekTopOffset + minute * WeekPixelsPerMinute;
+            var y = minute * WeekPixelsPerMinute;
             var line = TimelineDecoration(new Border
             {
                 Background = Brush(minute % 60 == 0 ? "#e2e8f0" : "#f1f5f9"),
@@ -4390,7 +4471,7 @@ public sealed class MainWindow : Window
             {
                 var label = TimelineDecoration(Text(TimeText.ToTime(minute), 11, "#64748b"));
                 Canvas.SetLeft(label, 6);
-                Canvas.SetTop(label, y - 8);
+                Canvas.SetTop(label, Math.Max(2, y - 8));
                 canvas.Children.Add(label);
             }
         }
@@ -4422,11 +4503,21 @@ public sealed class MainWindow : Window
 
         var scroller = new ScrollViewer
         {
+            Tag = "week-body-scroller",
             Content = canvas,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto
         };
-        AttachTimelineInitialScroll(scroller, ResolveWeekTimelineFocusMinute(), WeekTopOffset, WeekPixelsPerMinute);
+        AttachTimelineInitialScroll(scroller, ResolveWeekTimelineFocusMinute(), 0, WeekPixelsPerMinute);
+
+        var root = new Grid
+        {
+            RowDefinitions = new RowDefinitions("Auto,*")
+        };
+        Grid.SetRow(header, 0);
+        Grid.SetRow(scroller, 1);
+        root.Children.Add(header);
+        root.Children.Add(scroller);
 
         return new Border
         {
@@ -4434,7 +4525,8 @@ public sealed class MainWindow : Window
             BorderBrush = Brush("#e5e7eb"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Child = scroller
+            ClipToBounds = true,
+            Child = root
         };
     }
 
@@ -4471,22 +4563,60 @@ public sealed class MainWindow : Window
 
     private int WakeTimeMinute() => TimeText.ParseMinutes(_state.Preferences.WakeTime) ?? 8 * 60;
 
-    private void AddWeekDayColumn(Canvas canvas, WeekDaySchedule day, int dayIndex, double canvasHeight)
+    private Canvas BuildWeekHeaderCanvas(double canvasWidth)
+    {
+        var header = new Canvas
+        {
+            Tag = "week-header-canvas",
+            Width = canvasWidth,
+            Height = WeekTopOffset,
+            Background = Brush("#ffffff"),
+            ClipToBounds = true
+        };
+
+        var timeCorner = new Border
+        {
+            Width = WeekTimeLabelWidth,
+            Height = WeekTopOffset,
+            Background = Brush("#ffffff"),
+            BorderBrush = Brush("#e5e7eb"),
+            BorderThickness = new Thickness(0, 0, 1, 1)
+        };
+        Canvas.SetLeft(timeCorner, 0);
+        Canvas.SetTop(timeCorner, 0);
+        header.Children.Add(timeCorner);
+
+        for (var i = 0; i < _weekPlan.Days.Count; i++)
+        {
+            AddWeekDayHeader(header, _weekPlan.Days[i], i);
+        }
+
+        return header;
+    }
+
+    private void AddWeekDayBackground(Canvas canvas, WeekDaySchedule day, int dayIndex, double canvasHeight)
     {
         var x = WeekTimeLabelWidth + dayIndex * _weekDayWidth;
         var today = day.Date == DateOnly.FromDateTime(DateTime.Today);
         var focused = day.Date == _focusDate;
-        var compact = _weekDayWidth < 72;
 
         var background = new Border
         {
             Background = Brush(focused ? "#eff6ff" : today ? "#f8fafc" : "#ffffff"),
             Width = _weekDayWidth,
-            Height = canvasHeight - WeekTopOffset
+            Height = canvasHeight
         };
         Canvas.SetLeft(background, x);
-        Canvas.SetTop(background, WeekTopOffset);
+        Canvas.SetTop(background, 0);
         canvas.Children.Add(background);
+    }
+
+    private void AddWeekDayHeader(Canvas canvas, WeekDaySchedule day, int dayIndex)
+    {
+        var x = WeekTimeLabelWidth + dayIndex * _weekDayWidth;
+        var today = day.Date == DateOnly.FromDateTime(DateTime.Today);
+        var focused = day.Date == _focusDate;
+        var compact = _weekDayWidth < 72;
 
         var headerStack = new StackPanel
         {
@@ -4494,22 +4624,49 @@ public sealed class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        headerStack.Children.Add(Text($"周{WeekdayText(day.Date)}", compact ? 10 : 11, focused ? "#1d4ed8" : "#64748b", FontWeight.SemiBold));
-        headerStack.Children.Add(Text(compact ? $"{day.Date:dd}" : $"{day.Date:MM-dd}", compact ? 13 : 16, focused ? "#1d4ed8" : "#111827", FontWeight.SemiBold));
+        var weekday = Text($"周{WeekdayText(day.Date)}", compact ? 10 : 11, focused || today ? "#1a73e8" : "#64748b", FontWeight.SemiBold);
+        weekday.HorizontalAlignment = HorizontalAlignment.Center;
+        headerStack.Children.Add(weekday);
+        headerStack.Children.Add(BuildWeekDateBadge(day.Date, focused, today, compact));
+
+        Control headerContent = headerStack;
         if (day.Schedule.Unscheduled.Count > 0)
         {
-            headerStack.Children.Add(Text(compact ? $"未{day.Schedule.Unscheduled.Count}" : $"未排入 {day.Schedule.Unscheduled.Count}", 10, "#b45309", FontWeight.SemiBold));
+            var layer = new Grid();
+            layer.Children.Add(headerStack);
+            var countText = day.Schedule.Unscheduled.Count > 9 ? "9+" : day.Schedule.Unscheduled.Count.ToString();
+            var badge = new Border
+            {
+                Width = 18,
+                Height = 18,
+                CornerRadius = new CornerRadius(9),
+                Background = Brush("#fef3c7"),
+                BorderBrush = Brush("#f59e0b"),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 4, 5, 0),
+                Child = CenteredIconText(countText, 9, "#92400e")
+            };
+            layer.Children.Add(badge);
+            headerContent = layer;
         }
 
         var header = new Border
         {
-            Background = Brush(focused ? "#dbeafe" : today ? "#f8fafc" : "#ffffff"),
-            BorderBrush = Brush(focused ? "#2563eb" : "#e5e7eb"),
+            Background = Brush(focused ? "#f8fbff" : "#ffffff"),
+            BorderBrush = Brush(focused ? "#bfdbfe" : "#e5e7eb"),
             BorderThickness = new Thickness(0, 0, 1, 1),
             Width = _weekDayWidth,
             Height = WeekTopOffset,
-            Child = headerStack
+            Child = headerContent
         };
+        var headerTip = $"{day.Date:yyyy-MM-dd} 周{WeekdayText(day.Date)}";
+        if (day.Schedule.Unscheduled.Count > 0)
+        {
+            headerTip += $"\n未排入 {day.Schedule.Unscheduled.Count} 个任务";
+        }
+        ToolTip.SetTip(header, headerTip);
         header.PointerPressed += (_, args) =>
         {
             if (!args.GetCurrentPoint(header).Properties.IsLeftButtonPressed) return;
@@ -4533,34 +4690,76 @@ public sealed class MainWindow : Window
         canvas.Children.Add(header);
     }
 
+    private static Control BuildWeekDateBadge(DateOnly date, bool focused, bool today, bool compact)
+    {
+        var selected = focused && !today;
+        var size = compact ? 24 : 30;
+        var label = MonthSingleLineText(date.Day.ToString(), compact ? 12 : 15, today ? "#ffffff" : selected ? "#1967d2" : "#202124", FontWeight.SemiBold);
+        label.HorizontalAlignment = HorizontalAlignment.Center;
+        label.VerticalAlignment = VerticalAlignment.Center;
+
+        return new Border
+        {
+            Width = size,
+            Height = size,
+            CornerRadius = new CornerRadius(size / 2d),
+            Background = Brush(today ? "#1a73e8" : selected ? "#e8f0fe" : "#00ffffff"),
+            BorderBrush = Brush(selected ? "#1a73e8" : "#00ffffff"),
+            BorderThickness = new Thickness(selected ? 1 : 0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Child = label
+        };
+    }
+
     private Border BuildWeekScheduleBlockControl(WeekDaySchedule day, ScheduleBlock block, Canvas canvas, int dayIndex, TimelineEventLayout layout)
     {
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(day.Date, block);
-        var color = block.Type == ScheduleBlockType.Fixed ? "#dbeafe" : block.Category switch
-        {
-            "study" => "#dcfce7",
-            "code" => "#ede9fe",
-            "workout" => "#ffedd5",
-            _ => "#f8fafc"
-        };
+        var accent = done ? "#9aa0a6" : MonthEventAccent(block);
+        var eventWidth = WeekEventWidth(layout);
+        var ultraNarrow = eventWidth < 36;
+        var narrow = eventWidth < 56;
         var eventLabel = Text(
             WeekEventText(block, done, layout),
-            IsCompactWeekEvent(layout) ? 10 : 11,
+            IsCompactWeekEvent(layout) || narrow ? 10 : 11,
             done ? "#64748b" : current ? "#991b1b" : "#0f172a",
             FontWeight.SemiBold);
         eventLabel.TextWrapping = TextWrapping.Wrap;
         eventLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+        var eventContent = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions(ultraNarrow ? "*" : "Auto,*"),
+            ColumnSpacing = narrow ? 2 : 5
+        };
+        var accentStrip = new Border
+        {
+            Width = narrow ? 2 : 3,
+            CornerRadius = new CornerRadius(2),
+            Background = Brush(accent),
+            Opacity = done ? 0.58 : 1,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        if (!ultraNarrow)
+        {
+            Grid.SetColumn(accentStrip, 0);
+            Grid.SetColumn(eventLabel, 1);
+            eventContent.Children.Add(accentStrip);
+        }
+        else
+        {
+            Grid.SetColumn(eventLabel, 0);
+        }
+        eventContent.Children.Add(eventLabel);
         var border = new Border
         {
             Tag = $"week:{day.Date:yyyy-MM-dd}:{block.RuntimeId}",
-            Background = Brush(done ? "#f1f5f9" : color),
-            BorderBrush = Brush(current ? "#ef4444" : "#cbd5e1"),
+            Background = Brush(done ? "#f1f3f4" : MonthEventBackground(block)),
+            BorderBrush = Brush(current ? "#d93025" : "#dbe3ee"),
             BorderThickness = new Thickness(current ? 2 : 1),
             CornerRadius = new CornerRadius(6),
-            Padding = _weekDayWidth < 58 ? new Thickness(4, 4) : new Thickness(7, 5),
+            Padding = ultraNarrow ? new Thickness(2, 3) : narrow ? new Thickness(3, 3) : new Thickness(6, 5),
             Opacity = done ? 0.7 : 1,
-            Width = WeekEventWidth(layout),
+            Width = eventWidth,
             Height = Math.Max(24, block.DurationMin * WeekPixelsPerMinute - 3),
             Child = new Grid
             {
@@ -4571,11 +4770,11 @@ public sealed class MainWindow : Window
         var resizeGrip = new Border
         {
             Height = 4,
-            Background = Brush("#64748b"),
+            Background = Brush(accent),
             CornerRadius = new CornerRadius(3),
-            Opacity = block.Editable ? 0.36 : 0,
+            Opacity = block.Editable ? 0.32 : 0,
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Margin = new Thickness(10, 0, 10, 0),
+            Margin = narrow ? new Thickness(4, 0, 4, 0) : new Thickness(10, 0, 10, 0),
             Cursor = new Cursor(StandardCursorType.SizeNorthSouth)
         };
         resizeGrip.PointerPressed += (_, args) =>
@@ -4613,12 +4812,12 @@ public sealed class MainWindow : Window
             }
         };
         var rootGrid = (Grid)border.Child;
-        Grid.SetRow(eventLabel, 0);
+        Grid.SetRow(eventContent, 0);
         Grid.SetRow(resizeGrip, 1);
-        rootGrid.Children.Add(eventLabel);
+        rootGrid.Children.Add(eventContent);
         rootGrid.Children.Add(resizeGrip);
         Canvas.SetLeft(border, WeekEventLeft(dayIndex, layout));
-        Canvas.SetTop(border, WeekTopOffset + block.StartMin * WeekPixelsPerMinute + 2);
+        Canvas.SetTop(border, block.StartMin * WeekPixelsPerMinute + 2);
 
         border.DoubleTapped += async (_, args) =>
         {
@@ -4658,7 +4857,7 @@ public sealed class MainWindow : Window
             if (previewStart == _weekDragOriginalStart && previewDayIndex == _weekDragOriginalDayIndex) return;
 
             Canvas.SetLeft(border, WeekTimeLabelWidth + previewDayIndex * _weekDayWidth + 5);
-            Canvas.SetTop(border, WeekTopOffset + previewStart * WeekPixelsPerMinute + 2);
+            Canvas.SetTop(border, previewStart * WeekPixelsPerMinute + 2);
             border.Width = Math.Max(18, _weekDayWidth - 10);
             border.Opacity = 0.86;
             args.Handled = true;
@@ -4805,7 +5004,7 @@ public sealed class MainWindow : Window
         if (now < TimeText.FullDayStartMin || now > TimeText.FullDayEndMin) return;
 
         var x = WeekTimeLabelWidth + dayIndex * _weekDayWidth;
-        var y = WeekTopOffset + now * WeekPixelsPerMinute;
+        var y = now * WeekPixelsPerMinute;
         var line = TimelineDecoration(new Border
         {
             Background = Brush("#ef4444"),
@@ -4960,7 +5159,7 @@ public sealed class MainWindow : Window
         if (!args.GetCurrentPoint(canvas).Properties.IsLeftButtonPressed) return;
 
         var position = args.GetPosition(canvas);
-        if (position.X < WeekTimeLabelWidth || position.Y < WeekTopOffset) return;
+        if (position.X < WeekTimeLabelWidth) return;
 
         var dayIndex = WeekDayIndexFromX(position.X);
         if (dayIndex is null) return;
@@ -5060,14 +5259,14 @@ public sealed class MainWindow : Window
     {
         if (_weekCreatePreview is null) return;
 
-        Canvas.SetTop(_weekCreatePreview, WeekTopOffset + _weekCreateStartMin * WeekPixelsPerMinute + 2);
+        Canvas.SetTop(_weekCreatePreview, _weekCreateStartMin * WeekPixelsPerMinute + 2);
         _weekCreatePreview.Height = Math.Max(24, (_weekCreateEndMin - _weekCreateStartMin) * WeekPixelsPerMinute - 3);
         _weekCreatePreview.Child = Text($"{TimeText.ToTime(_weekCreateStartMin)}-{TimeText.ToTime(_weekCreateEndMin)}\n新日程", 11, "#1d4ed8", FontWeight.SemiBold);
     }
 
     private static int MinuteFromWeekCanvasY(double y, bool allowFullEnd = false)
     {
-        var raw = (int)Math.Round((y - WeekTopOffset) / WeekPixelsPerMinute / 15.0) * 15;
+        var raw = (int)Math.Round(y / WeekPixelsPerMinute / 15.0) * 15;
         return Math.Clamp(raw, TimeText.FullDayStartMin, allowFullEnd ? TimeText.FullDayEndMin : TimeText.FullDayEndMin - 30);
     }
 
@@ -6038,6 +6237,13 @@ public sealed class MainWindow : Window
     private static string SanitizeAiDiagnostic(string text, AiSettings settings)
     {
         var value = string.IsNullOrWhiteSpace(text) ? "没有返回诊断信息。" : text.Trim();
+        value = SanitizeAiText(value, settings);
+        return value.Length > 220 ? value[..220] + "..." : value;
+    }
+
+    private static string SanitizeAiText(string text, AiSettings settings)
+    {
+        var value = text ?? "";
         var key = (settings.ApiKey ?? "").Trim().Trim('"', '\'');
         if (!string.IsNullOrWhiteSpace(key))
         {
@@ -6049,7 +6255,7 @@ public sealed class MainWindow : Window
             }
         }
 
-        return value.Length > 220 ? value[..220] + "..." : value;
+        return value;
     }
 
     private Control RenderAiSettingsState()
@@ -6472,6 +6678,13 @@ public sealed class MainWindow : Window
         return _daySchedule.Blocks.Count(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable);
     }
 
+    private List<ScheduleBlock> SelectedEditableBlocks()
+    {
+        return _daySchedule.Blocks
+            .Where(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable)
+            .ToList();
+    }
+
     private void AddDaySelectionContextMenuItems(ContextMenu menu, ScheduleBlock block)
     {
         var selectedEditableCount = SelectedEditableBlockCount();
@@ -6515,20 +6728,41 @@ public sealed class MainWindow : Window
 
     private void MoveSelected(int deltaMinutes)
     {
-        var selectedCount = SelectedEditableBlockCount();
+        var selectedBlocks = SelectedEditableBlocks();
+        var selectedCount = selectedBlocks.Count;
         if (selectedCount == 0) return;
 
-        CaptureUndo("批量调整");
-        foreach (var block in _daySchedule.Blocks.Where(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable))
+        var clampedDelta = ClampGroupMoveDelta(selectedBlocks, deltaMinutes);
+        if (clampedDelta == 0)
         {
-            var duration = block.DurationMin;
-            block.StartMin = Math.Clamp(block.StartMin + deltaMinutes, 0, TimeText.FullDayEndMin - duration);
-            block.EndMin = block.StartMin + duration;
+            SetStatus("选中的日程已到当天边界");
+            return;
         }
+
+        CaptureUndo("批量调整");
+        MoveBlocksByDelta(selectedBlocks, clampedDelta);
         _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(block => block.StartMin)];
-        var direction = deltaMinutes < 0 ? "上移" : "下移";
-        SaveCurrentDayOverride($"已{direction} {selectedCount} 个日程 {Math.Abs(deltaMinutes)} 分钟");
+        var direction = clampedDelta < 0 ? "上移" : "下移";
+        SaveCurrentDayOverride($"已{direction} {selectedCount} 个日程 {Math.Abs(clampedDelta)} 分钟");
         RenderActivePage();
+    }
+
+    private static int ClampGroupMoveDelta(IReadOnlyCollection<ScheduleBlock> blocks, int deltaMinutes)
+    {
+        if (blocks.Count == 0) return 0;
+
+        var minStart = blocks.Min(block => block.StartMin);
+        var maxEnd = blocks.Max(block => block.EndMin);
+        return Math.Clamp(deltaMinutes, -minStart, TimeText.FullDayEndMin - maxEnd);
+    }
+
+    private static void MoveBlocksByDelta(IEnumerable<ScheduleBlock> blocks, int deltaMinutes)
+    {
+        foreach (var block in blocks)
+        {
+            block.StartMin += deltaMinutes;
+            block.EndMin += deltaMinutes;
+        }
     }
 
     private async Task DeleteSelectedAsync(bool confirmMulti = true)
@@ -6595,6 +6829,7 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(1),
             Background = Brush("#bfdbfe66")
         };
+        args.Pointer.Capture(_dayCanvas);
         args.Handled = true;
     }
 
@@ -6631,8 +6866,8 @@ public sealed class MainWindow : Window
         if (!_isBoxSelecting || _dayCanvas is null || _selectionBox is null) return;
         if (!_selectionMoved)
         {
-            _selectionBox = null;
-            _isBoxSelecting = false;
+            ClearBoxSelection();
+            args.Pointer.Capture(null);
             args.Handled = true;
             return;
         }
@@ -6646,12 +6881,28 @@ public sealed class MainWindow : Window
                 _selectedRuntimeIds.Add(id);
             }
         }
-        _dayCanvas.Children.Remove(_selectionBox);
+        ClearBoxSelection();
+        args.Pointer.Capture(null);
+        RenderActivePage();
+        args.Handled = true;
+    }
+
+    private void CancelBoxSelection(object? sender, PointerCaptureLostEventArgs args)
+    {
+        if (!_isBoxSelecting) return;
+        ClearBoxSelection();
+    }
+
+    private void ClearBoxSelection()
+    {
+        if (_selectionBox?.Parent is Canvas canvas)
+        {
+            canvas.Children.Remove(_selectionBox);
+        }
+
         _selectionBox = null;
         _isBoxSelecting = false;
         _selectionMoved = false;
-        RenderActivePage();
-        args.Handled = true;
     }
 
     private void CommitDrag(Point releasePoint)
@@ -6659,11 +6910,9 @@ public sealed class MainWindow : Window
         if (_dragBlock is null) return;
         var duration = _dragOriginalEnd - _dragOriginalStart;
         var nextStart = ResolveDayDragStart(releasePoint);
-        var minutes = nextStart - _dragOriginalStart;
-        var selectedBlocks = _daySchedule.Blocks
-            .Where(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable)
-            .ToList();
-        if (minutes == 0)
+        var requestedDelta = nextStart - _dragOriginalStart;
+        var selectedBlocks = SelectedEditableBlocks();
+        if (requestedDelta == 0)
         {
             _dragBlock = null;
             RenderActivePage();
@@ -6678,14 +6927,16 @@ public sealed class MainWindow : Window
         }
         else
         {
-            CaptureUndo("批量拖动");
-            var deltaMinutes = nextStart - _dragOriginalStart;
-            foreach (var block in selectedBlocks)
+            var deltaMinutes = ClampGroupMoveDelta(selectedBlocks, requestedDelta);
+            if (deltaMinutes == 0)
             {
-                var blockDuration = block.DurationMin;
-                block.StartMin = Math.Clamp(block.StartMin + deltaMinutes, 0, TimeText.FullDayEndMin - blockDuration);
-                block.EndMin = block.StartMin + blockDuration;
+                _dragBlock = null;
+                RenderActivePage();
+                return;
             }
+
+            CaptureUndo("批量拖动");
+            MoveBlocksByDelta(selectedBlocks, deltaMinutes);
         }
         _dragBlock = null;
         SaveCurrentDayOverride($"已拖动调整 {Math.Max(1, selectedBlocks.Count)} 个日程");

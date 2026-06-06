@@ -76,6 +76,33 @@ public sealed class ScheduleEngineTests
     }
 
     [Fact]
+    public void BuildDay_does_not_expand_weekly_target_tasks_without_week_assignment()
+    {
+        var engine = new ScheduleEngine();
+
+        var schedule = engine.BuildDay(new ScheduleBuildRequest
+        {
+            Date = new DateOnly(2026, 6, 1),
+            ActiveStart = "08:00",
+            ActiveEnd = "20:00",
+            Tasks =
+            [
+                new TaskRule
+                {
+                    Id = "code",
+                    Title = "写代码",
+                    Category = "code",
+                    DurationMin = 60,
+                    WeeklyTargetCount = 3,
+                    Priority = 5
+                }
+            ]
+        });
+
+        Assert.DoesNotContain(schedule.Blocks, block => block.Title == "写代码");
+    }
+
+    [Fact]
     public void BuildDay_reports_fixed_conflicts()
     {
         var engine = new ScheduleEngine();

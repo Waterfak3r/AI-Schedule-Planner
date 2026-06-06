@@ -65,7 +65,7 @@ internal static class Ui
     public static ScrollViewer Scroll(Control content) => new()
     {
         Content = content,
-        HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto
     };
 

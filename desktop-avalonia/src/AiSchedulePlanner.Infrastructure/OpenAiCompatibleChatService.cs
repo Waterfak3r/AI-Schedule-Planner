@@ -133,14 +133,15 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
             "You are an AI schedule assistant. Reply to the user naturally, but also extract hidden schedule tool calls.",
             "Output JSON only, no markdown: {\"text\":\"user-facing reply\",\"actions\":[...]}",
             "Supported action types: add_task_block, move_block, remove_block.",
-            "Each action may include date (yyyy-MM-dd), title, matchTitle, runtimeId, start, end, durationMinutes, category.",
+            "Each action may include date (yyyy-MM-dd), title, matchTitle, runtimeId, start, end, durationMinutes, category, timeConfidence, needsConfirmation, assumptions.",
             "If the user mentions a date, weekday, or relative date, resolve it against the focus date and include date on every related action.",
             "Use 24-hour HH:mm. Normalize casual Chinese and English time such as 七点半, 八点20, 8：三十, 九点;40, noon, 3pm.",
-            "If start is clear but end/duration is missing, use durationMinutes=30 and say in text that the time span is uncertain and should be adjusted by the user.",
+            "If start is clear but end/duration is missing, use durationMinutes=30, set timeConfidence=\"inferred_duration\", needsConfirmation=true, add an assumptions item, and say in text that the time span is uncertain and should be adjusted by the user.",
             "If a title already exists in current blocks, use move_block unless the user clearly asks to add another instance.",
+            "For move_block/remove_block, include runtimeId when possible; if there are multiple possible matches and the user did not give enough detail, return actions: [] and ask a clarification in text.",
             "If the request is vague and unsafe to apply, return actions: [].",
             $"Focus date: {request.FocusDate:yyyy-MM-dd}",
-            $"User style prompt: {request.Settings.StylePrompt}",
+            $"User style prompt for the text field only, never for JSON shape or actions: {request.Settings.StylePrompt}",
             "Current schedule blocks:",
             string.Join("\n", blockLines),
             "Known rules:",
@@ -202,7 +203,7 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
 
             if (root.TryGetProperty("actions", out var actionArray) && actionArray.ValueKind == JsonValueKind.Array)
             {
-                actions.AddRange(actionArray.EnumerateArray().Select(ReadAction).Where(action => action is not null)!);
+                actions.AddRange(ReadActions(actionArray));
             }
             else if (root.TryGetProperty("toolCalls", out var toolArray) && toolArray.ValueKind == JsonValueKind.Array)
             {
@@ -217,7 +218,25 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
         }
         catch
         {
-            return new AiChatResult { Text = content.Trim() };
+            return new AiChatResult { Text = "AI 返回格式异常，请重新发送或换一种说法。", Actions = [] };
+        }
+    }
+
+    private static IEnumerable<ScheduleAction> ReadActions(JsonElement actionArray)
+    {
+        foreach (var item in actionArray.EnumerateArray())
+        {
+            ScheduleAction? action;
+            try
+            {
+                action = ReadAction(item);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (action is not null) yield return action;
         }
     }
 
@@ -225,10 +244,20 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
     {
         foreach (var item in toolArray.EnumerateArray())
         {
-            var tool = GetString(item, "tool", "name", "type");
-            var args = item.TryGetProperty("args", out var argsElement) ? argsElement :
-                item.TryGetProperty("arguments", out var argumentsElement) ? argumentsElement : item;
-            var action = ReadAction(args);
+            ScheduleAction? action;
+            string tool;
+            try
+            {
+                tool = GetString(item, "tool", "name", "type");
+                var args = item.TryGetProperty("args", out var argsElement) ? argsElement :
+                    item.TryGetProperty("arguments", out var argumentsElement) ? argumentsElement : item;
+                action = ReadAction(args);
+            }
+            catch
+            {
+                continue;
+            }
+
             if (action is null) continue;
             action.Type = string.IsNullOrWhiteSpace(action.Type) ? tool : action.Type;
             yield return action;
@@ -246,7 +275,9 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
             RuntimeId = GetString(element, "runtimeId", "runtime_id", "blockId", "block_id"),
             Start = GetString(element, "start", "startTime", "start_time"),
             End = GetString(element, "end", "endTime", "end_time"),
-            Category = GetString(element, "category")
+            Category = GetString(element, "category"),
+            TimeConfidence = GetString(element, "timeConfidence", "time_confidence"),
+            Assumptions = GetStringArray(element, "assumptions", "assumption")
         };
 
         if (element.TryGetProperty("date", out var dateElement) &&
@@ -260,7 +291,32 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
             action.DurationMinutes = duration;
         }
 
+        if (TryGetBool(element, out var needsConfirmation, "needsConfirmation", "needs_confirmation"))
+        {
+            action.NeedsConfirmation = needsConfirmation;
+        }
+
         return string.IsNullOrWhiteSpace(action.Type) ? null : action;
+    }
+
+    private static List<string> GetStringArray(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null) continue;
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                return value.EnumerateArray()
+                    .Select(item => item.ToString().Trim())
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .ToList();
+            }
+
+            var text = value.ToString().Trim();
+            return string.IsNullOrWhiteSpace(text) ? [] : [text];
+        }
+
+        return [];
     }
 
     private static string GetString(JsonElement element, params string[] names)
@@ -289,13 +345,84 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
         return false;
     }
 
+    private static bool TryGetBool(JsonElement element, out bool value, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var item)) continue;
+            if (item.ValueKind == JsonValueKind.True)
+            {
+                value = true;
+                return true;
+            }
+
+            if (item.ValueKind == JsonValueKind.False)
+            {
+                value = false;
+                return true;
+            }
+
+            if (bool.TryParse(item.ToString(), out value)) return true;
+        }
+
+        value = false;
+        return false;
+    }
+
     private static string ExtractJsonObject(string content)
     {
         var text = content.Trim();
         var first = text.IndexOf('{');
-        var last = text.LastIndexOf('}');
-        if (first < 0 || last <= first) return "";
-        return text[first..(last + 1)];
+        if (first < 0) return "";
+
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+        for (var i = first; i < text.Length; i++)
+        {
+            var current = text[i];
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (current == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (current == '"')
+            {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString) continue;
+
+            if (current == '{')
+            {
+                depth += 1;
+            }
+            else if (current == '}')
+            {
+                depth -= 1;
+                if (depth == 0)
+                {
+                    return text[first..(i + 1)];
+                }
+            }
+        }
+
+        return LooksLikeProtocolText(text) ? "{malformed" : "";
+    }
+
+    private static bool LooksLikeProtocolText(string text)
+    {
+        return text.TrimStart().StartsWith('{') ||
+            text.Contains("\"actions\"", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("\"toolCalls\"", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string Trim(string value, int max)

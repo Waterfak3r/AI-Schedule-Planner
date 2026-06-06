@@ -18,6 +18,10 @@ desktop-avalonia/publish/
 *.db
 *.sqlite
 *.sqlite3
+planner-state.v1.json
+planner-state.v1.json.tmp
+ai-settings.local.json
+ai-settings.local.json.tmp
 
 # Logs
 *.log

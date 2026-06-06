@@ -156,7 +156,7 @@ public sealed class ScheduleEngine : IScheduleEngine
 
     private static bool ShouldTaskRunOnDate(TaskRule task, DateOnly date)
     {
-        if (task.WeeklyTargetCount > 0) return true;
+        if (task.WeeklyTargetCount > 0) return false;
         if (task.DaysOfWeek.Count == 0) return false;
         return task.DaysOfWeek.Contains(TimeText.WeekdayNumber(date));
     }
@@ -277,7 +277,10 @@ public sealed class ScheduleEngine : IScheduleEngine
                     result[date] = list;
                 }
 
-                list.Add(task.Clone());
+                var assignedTask = task.Clone();
+                assignedTask.WeeklyTargetCount = 0;
+                assignedTask.DaysOfWeek = [TimeText.WeekdayNumber(date)];
+                list.Add(assignedTask);
                 load[date] += Math.Max(5, task.DurationMin);
             }
         }
