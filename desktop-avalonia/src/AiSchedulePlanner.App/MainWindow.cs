@@ -8,7 +8,9 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using static AiSchedulePlanner.App.Ui;
 
 namespace AiSchedulePlanner.App;
@@ -42,6 +44,7 @@ public sealed class MainWindow : Window
     private const double WeekTopOffset = 56;
     private const double WeekTimeLabelWidth = 58;
     private const double WeekDayWidthDefault = 134;
+    private const double SelectionDragThreshold = 6;
     private const double SidebarExpandedWidth = 248;
     private const double SidebarCollapsedWidth = 76;
 
@@ -84,6 +87,7 @@ public sealed class MainWindow : Window
     private Border? _brandAccent;
     private TextBlock? _dataDirectoryText;
     private Button? _sidebarToggleButton;
+    private TextBlock? _sidebarToggleIcon;
     private Border? _topbarStatusPill;
     private bool _sidebarCollapsed;
     private double _dayEventWidth = DayEventWidthDefault;
@@ -100,6 +104,7 @@ public sealed class MainWindow : Window
     private Canvas? _dayCanvas;
     private Border? _selectionBox;
     private bool _isBoxSelecting;
+    private bool _selectionMoved;
     private Point _selectionStart;
     private ScheduleBlock? _dragBlock;
     private Point _dragStart;
@@ -134,6 +139,7 @@ public sealed class MainWindow : Window
     private Dictionary<DateOnly, DaySchedule> _undoSchedules = [];
     private Dictionary<string, bool>? _undoCompletedSnapshot;
     private string _undoDescription = "";
+    private Task? _loadTask;
 
     public MainWindow()
         : this(new JsonPlannerStore())
@@ -143,7 +149,7 @@ public sealed class MainWindow : Window
     public MainWindow(IPlannerStore store)
     {
         _store = store;
-        Title = "AI Schedule Planner - Avalonia";
+        Title = "AI 日程助手";
         Width = 1180;
         Height = 780;
         MinWidth = 940;
@@ -151,7 +157,7 @@ public sealed class MainWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Brush("#eef2f7");
         Content = BuildShell();
-        Loaded += async (_, _) => await LoadAsync();
+        Loaded += (_, _) => _loadTask ??= LoadAsync();
         SizeChanged += (_, _) => QueueScheduleViewportRefresh();
         KeyDown += HandleWindowKeyDown;
     }
@@ -174,7 +180,7 @@ public sealed class MainWindow : Window
         var sideDock = (DockPanel)sidebar.Child!;
         var brand = new StackPanel { Spacing = 7 };
         var brandHead = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 4 };
-        _brandTitle = Text("Schedule Studio", 21, "#ffffff", FontWeight.SemiBold);
+        _brandTitle = Text("AI 日程", 21, "#ffffff", FontWeight.SemiBold);
         _brandTitle.VerticalAlignment = VerticalAlignment.Center;
         _sidebarToggleButton = BuildSidebarToggleButton();
         Grid.SetColumn(_brandTitle, 0);
@@ -198,7 +204,8 @@ public sealed class MainWindow : Window
 
         var footer = new StackPanel { Spacing = 6 };
         footer.Children.Add(_statusText);
-        _dataDirectoryText = Text(_store.DataDirectory, 10, "#6b7280");
+        _dataDirectoryText = Text("本地数据已启用", 10, "#6b7280");
+        ToolTip.SetTip(_dataDirectoryText, _store.DataDirectory);
         footer.Children.Add(_dataDirectoryText);
         DockPanel.SetDock(footer, Dock.Bottom);
         sideDock.Children.Add(footer);
@@ -256,9 +263,10 @@ public sealed class MainWindow : Window
 
     private Button BuildSidebarToggleButton()
     {
+        _sidebarToggleIcon = CenteredIconText("<", 14, "#ffffff");
         var button = new Button
         {
-            Content = "<",
+            Content = _sidebarToggleIcon,
             Width = 30,
             Height = 30,
             MinHeight = 30,
@@ -268,7 +276,9 @@ public sealed class MainWindow : Window
             BorderBrush = Brush("#33415f"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
-            HorizontalAlignment = HorizontalAlignment.Right
+            HorizontalAlignment = HorizontalAlignment.Right,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
         ToolTip.SetTip(button, "收起侧边栏 Ctrl+B");
         button.Click += (_, _) => ToggleSidebarCollapsed();
@@ -338,8 +348,8 @@ public sealed class MainWindow : Window
 
         if (_brandTitle is not null)
         {
-            _brandTitle.Text = _sidebarCollapsed ? "AI" : "Schedule Studio";
-            _brandTitle.FontSize = _sidebarCollapsed ? 18 : 21;
+            _brandTitle.Text = _sidebarCollapsed ? "AI" : "AI 日程";
+            _brandTitle.FontSize = _sidebarCollapsed ? 16 : 21;
             _brandTitle.TextAlignment = _sidebarCollapsed ? TextAlignment.Center : TextAlignment.Left;
         }
 
@@ -359,11 +369,22 @@ public sealed class MainWindow : Window
         }
 
         _statusText.IsVisible = !_sidebarCollapsed;
-        _navPanel.Margin = _sidebarCollapsed ? new Thickness(0, 28, 0, 0) : new Thickness(0, 30, 0, 0);
+        _navPanel.Margin = _sidebarCollapsed ? new Thickness(0, 24, 0, 0) : new Thickness(0, 30, 0, 0);
 
         if (_sidebarToggleButton is not null)
         {
-            _sidebarToggleButton.Content = _sidebarCollapsed ? ">" : "<";
+            if (_sidebarToggleIcon is not null)
+            {
+                _sidebarToggleIcon.Text = _sidebarCollapsed ? ">" : "<";
+                _sidebarToggleIcon.Foreground = Brush(_sidebarCollapsed ? "#dbeafe" : "#ffffff");
+            }
+            _sidebarToggleButton.Width = _sidebarCollapsed ? 24 : 30;
+            _sidebarToggleButton.Height = _sidebarCollapsed ? 24 : 30;
+            _sidebarToggleButton.MinHeight = _sidebarCollapsed ? 24 : 30;
+            _sidebarToggleButton.Background = Brush(_sidebarCollapsed ? "#00ffffff" : "#26314c");
+            _sidebarToggleButton.BorderBrush = Brush(_sidebarCollapsed ? "#475569" : "#33415f");
+            _sidebarToggleButton.Foreground = Brush(_sidebarCollapsed ? "#dbeafe" : "#ffffff");
+            _sidebarToggleButton.CornerRadius = new CornerRadius(_sidebarCollapsed ? 12 : 7);
             ToolTip.SetTip(_sidebarToggleButton, _sidebarCollapsed ? "展开侧边栏 Ctrl+B" : "收起侧边栏 Ctrl+B");
         }
     }
@@ -419,6 +440,237 @@ public sealed class MainWindow : Window
             SetStatus($"加载失败：{ex.Message}", error: true);
             _content.Content = CenterText(ex.Message);
         }
+    }
+
+    public async Task SaveRenderedScreenshotAsync(string path, int width = 1180, int height = 780, string scenario = "")
+    {
+        await PrepareInternalReviewAsync(width, height, scenario);
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        using var bitmap = new RenderTargetBitmap(new PixelSize(width, height), new Vector(96, 96));
+        bitmap.Render(this);
+        bitmap.Save(path);
+    }
+
+    public async Task SaveUiAuditAsync(string path, int width = 1180, int height = 780, string scenario = "")
+    {
+        await PrepareInternalReviewAsync(width, height, scenario);
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllTextAsync(path, BuildUiAuditReport(width, height, scenario), Encoding.UTF8);
+    }
+
+    private async Task PrepareInternalReviewAsync(int width, int height, string scenario)
+    {
+        await EnsureLoadedAsync();
+        ApplyInternalReviewScenario(scenario);
+
+        Width = width;
+        Height = height;
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            Measure(new Size(width, height));
+            Arrange(new Rect(0, 0, width, height));
+            UpdateLayout();
+        }, DispatcherPriority.Render);
+
+        await Task.Delay(100);
+    }
+
+    private void ApplyInternalReviewScenario(string scenario)
+    {
+        if (string.IsNullOrWhiteSpace(scenario)) return;
+
+        switch (scenario.Trim().ToLowerInvariant())
+        {
+            case "schedule":
+            case "schedule-day":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
+                break;
+            case "schedule-selected":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: true, markComplete: false);
+                break;
+            case "schedule-completed":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: true, markComplete: true);
+                break;
+            case "schedule-week":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Week, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
+                break;
+            case "schedule-month":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Month, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
+                break;
+            case "schedule-collapsed":
+                ApplyScheduleReviewScenario(ScheduleViewMode.Week, panelCollapsed: true, sidebarCollapsed: true, selectBlock: false, markComplete: false);
+                break;
+        }
+    }
+
+    private void ApplyScheduleReviewScenario(ScheduleViewMode viewMode, bool panelCollapsed, bool sidebarCollapsed, bool selectBlock, bool markComplete)
+    {
+        _activePage = "Schedule";
+        _scheduleView = viewMode;
+        _state.Preferences.SchedulePanelCollapsed = panelCollapsed;
+        _sidebarCollapsed = sidebarCollapsed;
+        _state.Preferences.SidebarCollapsed = sidebarCollapsed;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        RebuildSchedules();
+
+        ScheduleBlock? reviewBlock = null;
+        if (selectBlock || markComplete)
+        {
+            reviewBlock = _daySchedule.Blocks
+                .Where(IsVisibleBlock)
+                .OrderBy(block => block.StartMin)
+                .FirstOrDefault();
+            if (reviewBlock is null)
+            {
+                reviewBlock = new ScheduleBlock
+                {
+                    RuntimeId = Ids.New("review"),
+                    Type = ScheduleBlockType.Task,
+                    Title = "写代码",
+                    Category = "code",
+                    StartMin = 7 * 60 + 30,
+                    EndMin = 9 * 60,
+                    Editable = true
+                };
+                _daySchedule.Blocks.Add(reviewBlock);
+            }
+        }
+
+        if (markComplete && reviewBlock is not null)
+        {
+            _state.Completed[reviewBlock.RuntimeId] = true;
+        }
+
+        if (selectBlock && reviewBlock is not null)
+        {
+            _selectedRuntimeIds.Clear();
+            _selectedRuntimeIds.Add(reviewBlock.RuntimeId);
+        }
+        else
+        {
+            _selectedRuntimeIds.Clear();
+        }
+
+        RenderActivePage();
+    }
+
+    private string BuildUiAuditReport(int width, int height, string scenario)
+    {
+        var visibleControls = this.GetVisualDescendants().OfType<Control>().Where(control => control.IsVisible).ToList();
+        var buttonLabels = visibleControls
+            .OfType<Button>()
+            .Select(button => ControlText(button.Content))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text.ReplaceLineEndings(" ").Trim())
+            .Distinct()
+            .Take(90)
+            .ToList();
+        var visibleTexts = visibleControls
+            .OfType<TextBlock>()
+            .Select(text => text.Text ?? "")
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text.ReplaceLineEndings(" ").Trim())
+            .Distinct()
+            .ToList();
+        var legacyScheduleTexts = visibleTexts
+            .Concat(buttonLabels)
+            .Where(text => text.Contains("Schedule", StringComparison.OrdinalIgnoreCase))
+            .Distinct()
+            .ToList();
+        var iconAlignmentRows = BuildIconButtonAlignmentRows(visibleControls.OfType<Button>());
+        var scrollViewers = visibleControls.OfType<ScrollViewer>().ToList();
+        var zeroSized = visibleControls.Count(control => control.Bounds.Width <= 0 || control.Bounds.Height <= 0);
+        var report = new StringBuilder();
+
+        report.AppendLine("AI 日程助手 internal UI audit");
+        report.AppendLine($"scenario: {(string.IsNullOrWhiteSpace(scenario) ? "default" : scenario)}");
+        report.AppendLine($"window: {width}x{height}");
+        report.AppendLine($"active_page: {_activePage}");
+        report.AppendLine($"schedule_view: {_scheduleView}");
+        report.AppendLine($"sidebar: {(_sidebarCollapsed ? "collapsed" : "expanded")}");
+        report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
+        report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
+        report.AppendLine($"visible_controls: {visibleControls.Count}");
+        report.AppendLine($"zero_sized_visible_controls: {zeroSized}");
+        if (zeroSized > 0)
+        {
+            var zeroSizedTypes = visibleControls
+                .Where(control => control.Bounds.Width <= 0 || control.Bounds.Height <= 0)
+                .Select(control => control.GetType().Name)
+                .GroupBy(name => name)
+                .Select(group => $"{group.Key}={group.Count()}")
+                .OrderBy(text => text)
+                .ToList();
+            report.AppendLine($"zero_sized_types: {string.Join(", ", zeroSizedTypes)}");
+        }
+        report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
+        report.AppendLine($"has_calendar_toggle: {buttonLabels.Contains("收起日历") || buttonLabels.Contains("展开日历")}");
+        report.AppendLine($"has_legacy_schedule_text: {legacyScheduleTexts.Count > 0}");
+        report.AppendLine($"legacy_schedule_texts: {string.Join(" | ", legacyScheduleTexts)}");
+        report.AppendLine("icon_button_alignment:");
+        foreach (var row in iconAlignmentRows)
+        {
+            report.AppendLine($"- {row}");
+        }
+        report.AppendLine("scroll_viewers:");
+        foreach (var viewer in scrollViewers)
+        {
+            report.AppendLine($"- h={viewer.HorizontalScrollBarVisibility}, v={viewer.VerticalScrollBarVisibility}, viewport={viewer.Viewport.Width:0.##}x{viewer.Viewport.Height:0.##}, extent={viewer.Extent.Width:0.##}x{viewer.Extent.Height:0.##}");
+        }
+
+        return report.ToString();
+    }
+
+    private static string ControlText(object? content)
+    {
+        return content switch
+        {
+            null => "",
+            string text => text,
+            TextBlock textBlock => textBlock.Text ?? "",
+            ContentControl contentControl => ControlText(contentControl.Content),
+            Decorator decorator => ControlText(decorator.Child),
+            Panel panel => string.Join("", panel.Children.Select(ControlText)),
+            _ => content.ToString() ?? ""
+        };
+    }
+
+    private static IReadOnlyList<string> BuildIconButtonAlignmentRows(IEnumerable<Button> buttons)
+    {
+        var rows = new List<string>();
+        foreach (var button in buttons)
+        {
+            var text = ControlText(button.Content).Trim();
+            if (text is not ("<" or ">" or "←" or "→" or "✓")) continue;
+
+            var textBlock = button.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .FirstOrDefault(block => (block.Text ?? "").Trim() == text);
+            var origin = textBlock?.TranslatePoint(new Point(0, 0), button);
+            if (textBlock is null || origin is null) continue;
+
+            var offsetX = origin.Value.X + textBlock.Bounds.Width / 2 - button.Bounds.Width / 2;
+            var offsetY = origin.Value.Y + textBlock.Bounds.Height / 2 - button.Bounds.Height / 2;
+            rows.Add($"{text}: button={button.Bounds.Width:0.##}x{button.Bounds.Height:0.##}, content={textBlock.Bounds.Width:0.##}x{textBlock.Bounds.Height:0.##}, offset={offsetX:0.##},{offsetY:0.##}");
+        }
+
+        return rows;
+    }
+
+    private Task EnsureLoadedAsync()
+    {
+        return _loadTask ??= LoadAsync();
     }
 
     private void RebuildSchedules()
@@ -628,6 +880,21 @@ public sealed class MainWindow : Window
                 GoToToday();
                 args.Handled = true;
                 break;
+            case Key.D1:
+            case Key.NumPad1:
+                SwitchScheduleView(ScheduleViewMode.Month);
+                args.Handled = true;
+                break;
+            case Key.D2:
+            case Key.NumPad2:
+                SwitchScheduleView(ScheduleViewMode.Week);
+                args.Handled = true;
+                break;
+            case Key.D3:
+            case Key.NumPad3:
+                SwitchScheduleView(ScheduleViewMode.Day);
+                args.Handled = true;
+                break;
             case Key.Left:
                 ShiftSchedulePeriod(-1);
                 args.Handled = true;
@@ -677,7 +944,7 @@ public sealed class MainWindow : Window
             "Ai" => "AI 设置",
             "Community" => "社区",
             "Advanced" => "高级",
-            _ => "AI Schedule Planner"
+            _ => "AI 日程助手"
         };
 
         _content.Content = _activePage switch
@@ -1745,6 +2012,10 @@ public sealed class MainWindow : Window
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             };
+            leftScroller.Loaded += (_, _) =>
+            {
+                Dispatcher.UIThread.Post(() => leftScroller.Offset = new Vector(0, 0), DispatcherPriority.Background);
+            };
             Grid.SetColumn(leftScroller, 0);
             root.Children.Add(leftScroller);
         }
@@ -1803,15 +2074,13 @@ public sealed class MainWindow : Window
         var editableCount = selected.Count(block => block.Editable);
         var range = selected.Count == 0 ? "" : $"{TimeText.ToTime(selected.Min(block => block.StartMin))}-{TimeText.ToTime(selected.Max(block => block.EndMin))}";
 
-        var root = new StackPanel { Spacing = 8 };
         var text = new StackPanel { Spacing = 2 };
         text.Children.Add(Text($"已选中 {selected.Count} 个日程", 13, "#1d4ed8", FontWeight.SemiBold));
         text.Children.Add(Text(editableCount == 0
             ? "选中的日程不可批量编辑。"
-            : $"范围 {range}。可拖动选中项批量移动，或使用按钮快速微调。",
+            : $"范围 {range}。拖动可批量移动，Ctrl 点按增减选择。",
             12,
             editableCount == 0 ? "#64748b" : "#334155"));
-        root.Children.Add(text);
 
         var actions = BuildSelectionActionButtons(editableCount > 0, compact: false);
         var clear = ToolbarButton("取消选择", (_, _) =>
@@ -1826,7 +2095,31 @@ public sealed class MainWindow : Window
         delete.IsEnabled = editableCount > 0;
         AddSelectionAction(actions, clear);
         AddSelectionAction(actions, delete, 0);
-        root.Children.Add(actions);
+        actions.HorizontalAlignment = HorizontalAlignment.Right;
+
+        Control content;
+        if (ResolveScheduleCalendarViewportWidth() < 680)
+        {
+            var stack = new StackPanel { Spacing = 8 };
+            actions.HorizontalAlignment = HorizontalAlignment.Left;
+            stack.Children.Add(text);
+            stack.Children.Add(actions);
+            content = stack;
+        }
+        else
+        {
+            actions.MaxWidth = 450;
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+                ColumnSpacing = 14
+            };
+            Grid.SetColumn(text, 0);
+            Grid.SetColumn(actions, 1);
+            grid.Children.Add(text);
+            grid.Children.Add(actions);
+            content = grid;
+        }
 
         return new Border
         {
@@ -1835,7 +2128,7 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12, 9),
-            Child = root
+            Child = content
         };
     }
 
@@ -1888,7 +2181,7 @@ public sealed class MainWindow : Window
             ColumnSpacing = 8
         };
         var labelText = Text(label, 12, "#64748b", FontWeight.SemiBold);
-        var valueText = Text(value, 14, color, FontWeight.SemiBold);
+        var valueText = Text(value, 13, color, FontWeight.SemiBold);
         Grid.SetColumn(labelText, 0);
         Grid.SetColumn(valueText, 1);
         row.Children.Add(labelText);
@@ -1899,23 +2192,23 @@ public sealed class MainWindow : Window
             BorderBrush = Brush(border),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(10, 8),
-            Margin = new Thickness(0, 0, 8, 8),
-            MinWidth = 104,
+            Padding = new Thickness(9, 6),
+            Margin = new Thickness(0, 0, 6, 6),
+            MinWidth = 90,
             Child = row
         };
     }
 
     private Control RenderScheduleToolbar()
     {
-        var root = new StackPanel { Spacing = 8 };
+        var viewportWidth = ResolveScheduleCalendarViewportWidth();
+        var singleLine = viewportWidth >= 880;
 
-        var primary = new Grid
+        var nav = new WrapPanel
         {
-            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            ColumnSpacing = 12
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
         };
-        var nav = new WrapPanel { Orientation = Orientation.Horizontal };
         void AddNav(Control control, double right = 8)
         {
             control.Margin = new Thickness(0, 0, right, 0);
@@ -1926,8 +2219,6 @@ public sealed class MainWindow : Window
         AddNav(ToolbarButton("今天", (_, _) => GoToToday(), secondary: true));
         AddNav(ToolbarButton(_state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历", (_, _) => ToggleSchedulePanel(), secondary: true));
         AddNav(BuildScheduleNavGroup(), 0);
-        Grid.SetColumn(nav, 0);
-        primary.Children.Add(nav);
 
         var titleStack = new StackPanel
         {
@@ -1937,18 +2228,57 @@ public sealed class MainWindow : Window
         };
         titleStack.Children.Add(MonthSingleLineText(SchedulePeriodTitle(), 20, "#202124", FontWeight.SemiBold));
         titleStack.Children.Add(MonthSingleLineText(SchedulePeriodSubtitle(), 11, "#5f6368", FontWeight.SemiBold));
-        Grid.SetColumn(titleStack, 1);
-        primary.Children.Add(titleStack);
-        root.Children.Add(primary);
 
-        var secondary = new Grid
+        var actions = BuildScheduleToolbarActions(singleLine);
+        Control content;
+        if (singleLine)
         {
-            ColumnDefinitions = new ColumnDefinitions("*")
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,14,*,14,Auto"),
+                MinHeight = 38
+            };
+            Grid.SetColumn(nav, 0);
+            Grid.SetColumn(titleStack, 2);
+            Grid.SetColumn(actions, 4);
+            grid.Children.Add(nav);
+            grid.Children.Add(titleStack);
+            grid.Children.Add(actions);
+            content = grid;
+        }
+        else
+        {
+            var root = new StackPanel { Spacing = 8 };
+            var top = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                ColumnSpacing = 10
+            };
+            Grid.SetColumn(nav, 0);
+            Grid.SetColumn(titleStack, 1);
+            top.Children.Add(nav);
+            top.Children.Add(titleStack);
+            actions.HorizontalAlignment = HorizontalAlignment.Left;
+            root.Children.Add(top);
+            root.Children.Add(actions);
+            content = root;
+        }
+
+        return new Border
+        {
+            Background = Brush("#00ffffff"),
+            Padding = new Thickness(0, 0, 0, 2),
+            Child = content
         };
+    }
+
+    private WrapPanel BuildScheduleToolbarActions(bool alignRight)
+    {
         var actions = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right
+            HorizontalAlignment = alignRight ? HorizontalAlignment.Right : HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center
         };
         void AddAction(Control control, double right = 8)
         {
@@ -1957,7 +2287,7 @@ public sealed class MainWindow : Window
             actions.Children.Add(control);
         }
 
-        AddAction(BuildScheduleViewSwitcher(), 12);
+        AddAction(BuildScheduleViewSwitcher(), 10);
         AddAction(ToolbarButton("新建", async (_, _) =>
         {
             await CreateScheduleBlockInDayViewAsync(ResolveDefaultNewBlockStartMin());
@@ -1968,22 +2298,12 @@ public sealed class MainWindow : Window
             await (Clipboard?.SetTextAsync(reminder) ?? Task.CompletedTask);
             SetStatus("提醒已复制到剪贴板");
         }, secondary: true));
-        var restore = ToolbarButton("恢复当天", (_, _) => ClearCurrentDayOverride(), secondary: true);
-        restore.IsEnabled = HasCurrentDayOverride();
-        AddAction(restore, 0);
-        Grid.SetColumn(actions, 0);
-        secondary.Children.Add(actions);
-        root.Children.Add(secondary);
-
-        return new Border
+        if (HasCurrentDayOverride())
         {
-            Background = Brush("#ffffff"),
-            BorderBrush = Brush("#dadce0"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10),
-            Child = root
-        };
+            AddAction(ToolbarButton("恢复当天", (_, _) => ClearCurrentDayOverride(), secondary: true), 0);
+        }
+
+        return actions;
     }
 
     private Button ToolbarButton(string text, EventHandler<RoutedEventArgs> onClick, bool secondary = false)
@@ -1991,6 +2311,7 @@ public sealed class MainWindow : Window
         var button = Button(text, onClick, secondary: secondary);
         button.MinHeight = 34;
         button.Padding = new Thickness(12, 7);
+        button.FontWeight = FontWeight.SemiBold;
         return button;
     }
 
@@ -2021,14 +2342,16 @@ public sealed class MainWindow : Window
     {
         var button = new Button
         {
-            Content = text,
+            Content = CenteredIconText(text, 15, "#3c4043"),
             MinHeight = 34,
             Padding = new Thickness(13, 7),
             Background = Brush("#00ffffff"),
             Foreground = Brush("#3c4043"),
             BorderBrush = Brush("#00ffffff"),
             BorderThickness = new Thickness(0),
-            CornerRadius = new CornerRadius(0)
+            CornerRadius = new CornerRadius(0),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
         if (!string.IsNullOrWhiteSpace(tip))
         {
@@ -2060,10 +2383,7 @@ public sealed class MainWindow : Window
         var active = _scheduleView == mode;
         var button = Button(label, (_, _) =>
         {
-            SetScheduleView(mode, savePreference: true);
-            _selectedRuntimeIds.Clear();
-            RebuildSchedules();
-            RenderActivePage();
+            SwitchScheduleView(mode);
         }, secondary: !active);
         button.MinHeight = 34;
         button.Padding = new Thickness(14, 7);
@@ -2072,7 +2392,16 @@ public sealed class MainWindow : Window
         button.BorderBrush = Brush("#00ffffff");
         button.BorderThickness = new Thickness(0);
         button.CornerRadius = new CornerRadius(0);
+        ToolTip.SetTip(button, $"{ScheduleViewLabel(mode)}视图 Ctrl+{ScheduleViewShortcutNumber(mode)}");
         return button;
+    }
+
+    private void SwitchScheduleView(ScheduleViewMode mode)
+    {
+        SetScheduleView(mode, savePreference: true);
+        _selectedRuntimeIds.Clear();
+        RebuildSchedules();
+        RenderActivePage();
     }
 
     private void SetScheduleView(ScheduleViewMode mode, bool savePreference)
@@ -2099,6 +2428,16 @@ public sealed class MainWindow : Window
             ScheduleViewMode.Month => "月",
             ScheduleViewMode.Week => "周",
             _ => "日"
+        };
+    }
+
+    private static int ScheduleViewShortcutNumber(ScheduleViewMode mode)
+    {
+        return mode switch
+        {
+            ScheduleViewMode.Month => 1,
+            ScheduleViewMode.Week => 2,
+            _ => 3
         };
     }
 
@@ -2321,15 +2660,19 @@ public sealed class MainWindow : Window
             var button = new Button
             {
                 Content = BuildMiniMonthDayContent(day, blockCount, isSelected, isToday),
+                Width = 30,
+                Height = 30,
                 MinHeight = 30,
-                Margin = new Thickness(2),
+                Margin = new Thickness(1),
                 Padding = new Thickness(0),
                 FontSize = 12,
-                Background = Brush(isSelected ? "#1a73e8" : "#ffffff"),
+                Background = Brush(isSelected ? "#1a73e8" : "#00ffffff"),
                 Foreground = Brush(isSelected ? "#ffffff" : isToday ? "#1a73e8" : "#202124"),
-                BorderBrush = Brush(isSelected ? "#1a73e8" : isToday ? "#1a73e8" : "#dbe3ee"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6)
+                BorderBrush = Brush(isSelected || isToday ? "#1a73e8" : "#00ffffff"),
+                BorderThickness = new Thickness(isSelected || isToday ? 1 : 0),
+                CornerRadius = new CornerRadius(15),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center
             };
             if (blockCount > 0)
             {
@@ -2424,7 +2767,7 @@ public sealed class MainWindow : Window
         }
 
         root.Children.Add(Text($"已选中 {selected.Count} 个", 18, "#111827", FontWeight.SemiBold));
-        root.Children.Add(Text("拖动任意选中日程可批量移动，也可以按 5/15/30 分钟微调。", 12, "#64748b"));
+        root.Children.Add(Text("拖动任意选中日程可批量移动，Ctrl 点按增减选择。", 12, "#64748b"));
 
         var buttons = BuildSelectionActionButtons(selected.Any(block => block.Editable), compact: true);
         var clear = Button("取消选择", (_, _) =>
@@ -2465,7 +2808,7 @@ public sealed class MainWindow : Window
         {
             ScheduleViewMode.Month => "单击日期查看当天日程，拖动事件可改到其他日期。",
             ScheduleViewMode.Week => "拖动空白创建时间段，拖动事件可改时间或日期。",
-            _ => "拖动空白可框选多个日程，右键日程可编辑或删除。"
+            _ => "拖动空白可框选多个日程，右键选中项可批量移动或删除。"
         };
     }
 
@@ -2536,7 +2879,7 @@ public sealed class MainWindow : Window
         };
         var check = new Button
         {
-            Content = done ? "✓" : "",
+            Content = CenteredIconText(done ? "✓" : "", 12, done ? "#ffffff" : "#64748b"),
             Width = 22,
             Height = 22,
             MinHeight = 22,
@@ -2545,7 +2888,9 @@ public sealed class MainWindow : Window
             Foreground = Brush(done ? "#ffffff" : "#64748b"),
             BorderBrush = Brush(done ? "#16a34a" : "#cbd5e1"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(11)
+            CornerRadius = new CornerRadius(11),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
         check.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
 
@@ -2593,17 +2938,10 @@ public sealed class MainWindow : Window
             RebuildSchedules();
             RenderActivePage();
         };
-        var delete = new MenuItem { Header = "删除" };
-        delete.Click += async (_, _) =>
-        {
-            _selectedRuntimeIds.Clear();
-            _selectedRuntimeIds.Add(block.RuntimeId);
-            await DeleteSelectedAsync(confirmMulti: false);
-        };
         menu.Items.Add(complete);
         menu.Items.Add(edit);
         menu.Items.Add(openDay);
-        menu.Items.Add(delete);
+        AddDaySelectionContextMenuItems(menu, block);
         row.ContextMenu = menu;
 
         return row;
@@ -2716,16 +3054,16 @@ public sealed class MainWindow : Window
         for (var minute = 0; minute <= TimeText.FullDayEndMin; minute += 60)
         {
             var y = DayTopOffset + minute * DayPixelsPerMinute;
-            var line = new Border
+            var line = TimelineDecoration(new Border
             {
                 Background = Brush(minute % 120 == 0 ? "#d1d5db" : "#e5e7eb"),
                 Width = _dayEventWidth + 24,
                 Height = 1
-            };
+            });
             Canvas.SetLeft(line, DayLabelWidth);
             Canvas.SetTop(line, y);
             _dayCanvas.Children.Add(line);
-            var label = Text(TimeText.ToTime(minute), 11, "#64748b");
+            var label = TimelineDecoration(Text(TimeText.ToTime(minute), 11, "#64748b"));
             Canvas.SetLeft(label, 8);
             Canvas.SetTop(label, y - 8);
             _dayCanvas.Children.Add(label);
@@ -2819,6 +3157,7 @@ public sealed class MainWindow : Window
                 RowDefinitions = new RowDefinitions("*,6")
             }
         };
+        ToolTip.SetTip(border, ScheduleBlockTooltip(_focusDate, block, done, current));
         var eventContent = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
@@ -2826,7 +3165,7 @@ public sealed class MainWindow : Window
         };
         var completeButton = new Button
         {
-            Content = done ? "✓" : "",
+            Content = CenteredIconText(done ? "✓" : "", 15, done ? "#ffffff" : "#64748b"),
             Width = 28,
             Height = 28,
             MinHeight = 28,
@@ -2835,7 +3174,9 @@ public sealed class MainWindow : Window
             Foreground = Brush(done ? "#ffffff" : "#64748b"),
             BorderBrush = Brush(done ? "#16a34a" : "#cbd5e1"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(14)
+            CornerRadius = new CornerRadius(14),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
         completeButton.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var textStack = new StackPanel { Spacing = 2 };
@@ -2915,11 +3256,20 @@ public sealed class MainWindow : Window
             }
             if (args.GetCurrentPoint(border).Properties.IsRightButtonPressed)
             {
+                return;
+            }
+
+            var controlPressed = (args.KeyModifiers & KeyModifiers.Control) != 0;
+            var alreadySelected = _selectedRuntimeIds.Contains(block.RuntimeId);
+            if (controlPressed && alreadySelected)
+            {
+                _selectedRuntimeIds.Remove(block.RuntimeId);
+                RenderActivePage();
                 args.Handled = true;
                 return;
             }
 
-            if ((args.KeyModifiers & KeyModifiers.Control) == 0)
+            if (!controlPressed && !alreadySelected)
             {
                 _selectedRuntimeIds.Clear();
             }
@@ -2971,16 +3321,9 @@ public sealed class MainWindow : Window
         complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var edit = new MenuItem { Header = "编辑" };
         edit.Click += async (_, _) => await EditScheduleBlockAsync(block);
-        var delete = new MenuItem { Header = "删除" };
-        delete.Click += async (_, _) =>
-        {
-            _selectedRuntimeIds.Clear();
-            _selectedRuntimeIds.Add(block.RuntimeId);
-            await DeleteSelectedAsync(confirmMulti: false);
-        };
         menu.Items.Add(complete);
         menu.Items.Add(edit);
-        menu.Items.Add(delete);
+        AddDaySelectionContextMenuItems(menu, block);
         border.ContextMenu = menu;
 
         return border;
@@ -2994,24 +3337,24 @@ public sealed class MainWindow : Window
         if (now < TimeText.FullDayStartMin || now > TimeText.FullDayEndMin) return;
 
         var y = DayTopOffset + now * DayPixelsPerMinute;
-        var line = new Border
+        var line = TimelineDecoration(new Border
         {
             Background = Brush("#ef4444"),
             Width = _dayEventWidth + 34,
             Height = 2,
             CornerRadius = new CornerRadius(1)
-        };
+        });
         Canvas.SetLeft(line, DayLabelWidth);
         Canvas.SetTop(line, y);
         canvas.Children.Add(line);
 
-        var label = new Border
+        var label = TimelineDecoration(new Border
         {
             Background = Brush("#ef4444"),
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(7, 2),
             Child = Text($"现在 {TimeText.ToTime(now)}", 11, "#ffffff", FontWeight.SemiBold)
-        };
+        });
         Canvas.SetLeft(label, DayLabelWidth + Math.Max(8, _dayEventWidth - 74));
         Canvas.SetTop(label, Math.Max(2, y - 11));
         canvas.Children.Add(label);
@@ -3171,6 +3514,39 @@ public sealed class MainWindow : Window
         }, danger: true);
         delete.IsVisible = !isNew;
         Button? save = null;
+
+        bool TrySaveScheduleBlock()
+        {
+            var nextTitle = (title.Text ?? "").Trim();
+            var startMin = TimeText.ParseMinutes(start.Text);
+            var endMin = TimeText.ParseMinutes(end.Text);
+            if (nextTitle.Length == 0)
+            {
+                error.Text = "标题不能为空。";
+                return false;
+            }
+            if (startMin is null || endMin is null || endMin <= startMin)
+            {
+                error.Text = "请输入有效时间，例如 09:00 到 10:30。";
+                return false;
+            }
+
+            CaptureUndo(isNew ? "新建日程" : "编辑日程");
+            block.Title = nextTitle;
+            block.StartMin = startMin.Value;
+            block.EndMin = endMin.Value;
+            block.Category = category.SelectedItem is CategoryOption option ? option.Value : "other";
+            if (isNew)
+            {
+                _daySchedule.Blocks.Add(block);
+                _selectedRuntimeIds.Clear();
+                _selectedRuntimeIds.Add(block.RuntimeId);
+            }
+            _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(item => item.StartMin).ThenBy(item => item.EndMin)];
+            SaveCurrentDayOverride(isNew ? $"已新建 {block.Title}" : $"已编辑 {block.Title}");
+            return true;
+        }
+
         void UpdatePreview()
         {
             error.Text = "";
@@ -3222,34 +3598,7 @@ public sealed class MainWindow : Window
 
         save = Button("保存", (_, _) =>
         {
-            var nextTitle = (title.Text ?? "").Trim();
-            var startMin = TimeText.ParseMinutes(start.Text);
-            var endMin = TimeText.ParseMinutes(end.Text);
-            if (nextTitle.Length == 0)
-            {
-                error.Text = "标题不能为空。";
-                return;
-            }
-            if (startMin is null || endMin is null || endMin <= startMin)
-            {
-                error.Text = "请输入有效时间，例如 09:00 到 10:30。";
-                return;
-            }
-
-            CaptureUndo(isNew ? "新建日程" : "编辑日程");
-            block.Title = nextTitle;
-            block.StartMin = startMin.Value;
-            block.EndMin = endMin.Value;
-            block.Category = category.SelectedItem is CategoryOption option ? option.Value : "other";
-            if (isNew)
-            {
-                _daySchedule.Blocks.Add(block);
-                _selectedRuntimeIds.Clear();
-                _selectedRuntimeIds.Add(block.RuntimeId);
-            }
-            _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(item => item.StartMin).ThenBy(item => item.EndMin)];
-            SaveCurrentDayOverride(isNew ? $"已新建 {block.Title}" : $"已编辑 {block.Title}");
-            dialog.Close(true);
+            if (TrySaveScheduleBlock()) dialog.Close(true);
         });
         Grid.SetColumn(delete, 0);
         Grid.SetColumn(cancel, 2);
@@ -3264,6 +3613,21 @@ public sealed class MainWindow : Window
             UpdatePreview();
             title.Focus();
             title.SelectAll();
+        };
+        dialog.KeyDown += (_, args) =>
+        {
+            if (args.Key == Key.Escape)
+            {
+                dialog.Close(false);
+                args.Handled = true;
+                return;
+            }
+
+            if (args.Key == Key.Enter && args.KeyModifiers == KeyModifiers.None)
+            {
+                if (TrySaveScheduleBlock()) dialog.Close(true);
+                args.Handled = true;
+            }
         };
 
         var result = await dialog.ShowDialog<bool>(this);
@@ -3772,7 +4136,7 @@ public sealed class MainWindow : Window
             Cursor = new Cursor(StandardCursorType.Hand),
             Child = content
         };
-        ToolTip.SetTip(chip, $"{block.Start}-{block.End}  {block.Title}");
+        ToolTip.SetTip(chip, ScheduleBlockTooltip(date, block, done, current));
         chip.PointerPressed += (_, args) =>
         {
             if (args.GetCurrentPoint(chip).Properties.IsRightButtonPressed)
@@ -3869,6 +4233,37 @@ public sealed class MainWindow : Window
             TextWrapping = TextWrapping.NoWrap,
             TextTrimming = TextTrimming.CharacterEllipsis
         };
+    }
+
+    private static TextBlock CenteredIconText(string text, double size, string color)
+    {
+        return new TextBlock
+        {
+            Text = text,
+            FontSize = size,
+            LineHeight = size,
+            Foreground = Brush(color),
+            FontWeight = FontWeight.SemiBold,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.NoWrap,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+    }
+
+    private static string ScheduleBlockTooltip(DateOnly date, ScheduleBlock block, bool done, bool current)
+    {
+        var type = block.Type == ScheduleBlockType.Fixed ? "固定事项" : "任务";
+        var category = block.Type == ScheduleBlockType.Task ? $" · {CategoryLabel(block.Category)}" : "";
+        var buffer = block.BufferMin > 0 ? $" · 缓冲 {block.BufferMin} 分钟" : "";
+        var status = done ? "已完成" : current ? "进行中" : "未完成";
+        return $"{date:yyyy-MM-dd} 周{WeekdayText(date)}\n{block.Start}-{block.End} · {block.DurationMin} 分钟\n{block.Title}\n{type}{category}{buffer} · {status}";
+    }
+
+    private static T TimelineDecoration<T>(T control) where T : InputElement
+    {
+        control.IsHitTestVisible = false;
+        return control;
     }
 
     private static string MonthEventAccent(ScheduleBlock block)
@@ -3981,19 +4376,19 @@ public sealed class MainWindow : Window
         for (var minute = 0; minute <= TimeText.FullDayEndMin; minute += 30)
         {
             var y = WeekTopOffset + minute * WeekPixelsPerMinute;
-            var line = new Border
+            var line = TimelineDecoration(new Border
             {
                 Background = Brush(minute % 60 == 0 ? "#e2e8f0" : "#f1f5f9"),
                 Width = canvasWidth - WeekTimeLabelWidth,
                 Height = 1
-            };
+            });
             Canvas.SetLeft(line, WeekTimeLabelWidth);
             Canvas.SetTop(line, y);
             canvas.Children.Add(line);
 
             if (minute % 60 == 0)
             {
-                var label = Text(TimeText.ToTime(minute), 11, "#64748b");
+                var label = TimelineDecoration(Text(TimeText.ToTime(minute), 11, "#64748b"));
                 Canvas.SetLeft(label, 6);
                 Canvas.SetTop(label, y - 8);
                 canvas.Children.Add(label);
@@ -4003,12 +4398,12 @@ public sealed class MainWindow : Window
         for (var i = 0; i < _weekPlan.Days.Count; i++)
         {
             var x = WeekTimeLabelWidth + i * _weekDayWidth;
-            var separator = new Border
+            var separator = TimelineDecoration(new Border
             {
                 Background = Brush("#e5e7eb"),
                 Width = 1,
                 Height = canvasHeight
-            };
+            });
             Canvas.SetLeft(separator, x);
             Canvas.SetTop(separator, 0);
             canvas.Children.Add(separator);
@@ -4172,6 +4567,7 @@ public sealed class MainWindow : Window
                 RowDefinitions = new RowDefinitions("*,5")
             }
         };
+        ToolTip.SetTip(border, ScheduleBlockTooltip(day.Date, block, done, current));
         var resizeGrip = new Border
         {
             Height = 4,
@@ -4234,7 +4630,6 @@ public sealed class MainWindow : Window
         {
             if (args.GetCurrentPoint(border).Properties.IsRightButtonPressed)
             {
-                args.Handled = true;
                 return;
             }
 
@@ -4411,24 +4806,24 @@ public sealed class MainWindow : Window
 
         var x = WeekTimeLabelWidth + dayIndex * _weekDayWidth;
         var y = WeekTopOffset + now * WeekPixelsPerMinute;
-        var line = new Border
+        var line = TimelineDecoration(new Border
         {
             Background = Brush("#ef4444"),
             Width = _weekDayWidth,
             Height = 2,
             CornerRadius = new CornerRadius(1)
-        };
+        });
         Canvas.SetLeft(line, x);
         Canvas.SetTop(line, y);
         canvas.Children.Add(line);
 
-        var dot = new Border
+        var dot = TimelineDecoration(new Border
         {
             Background = Brush("#ef4444"),
             Width = 8,
             Height = 8,
             CornerRadius = new CornerRadius(4)
-        };
+        });
         Canvas.SetLeft(dot, x - 4);
         Canvas.SetTop(dot, y - 3);
         canvas.Children.Add(dot);
@@ -5456,6 +5851,18 @@ public sealed class MainWindow : Window
             SetStatus(error ? $"AI 设置：{message}" : message, error);
         }
 
+        void MarkAiSettingsDirty(object? _, TextChangedEventArgs __)
+        {
+            saveStatus.Text = "有未保存更改。测试连接只读取当前输入，保存后才会写入本地。";
+            saveStatus.Foreground = Brush("#64748b");
+        }
+
+        foreach (var input in new[] { baseUrl.Text, model.Text, path.Text, key.Text, header.Text, prefix.Text })
+        {
+            input.TextChanged += MarkAiSettingsDirty;
+        }
+        style.TextChanged += MarkAiSettingsDirty;
+
         var connection = new StackPanel { Spacing = 12 };
         connection.Children.Add(RenderAiSettingsState());
         connection.Children.Add(baseUrl.Panel);
@@ -5483,8 +5890,15 @@ public sealed class MainWindow : Window
         connection.Children.Add(authGrid);
         connection.Children.Add(key.Panel);
 
-        var connectionActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        connectionActions.Children.Add(Button("使用默认 OpenAI", (_, _) =>
+        var connectionActions = new WrapPanel { Orientation = Orientation.Horizontal };
+        void AddConnectionAction(Control control, double right = 8)
+        {
+            control.Margin = new Thickness(0, 0, right, 8);
+            control.VerticalAlignment = VerticalAlignment.Center;
+            connectionActions.Children.Add(control);
+        }
+
+        AddConnectionAction(Button("使用默认 OpenAI", (_, _) =>
         {
             baseUrl.Text.Text = "https://api.openai.com/v1";
             path.Text.Text = "/chat/completions";
@@ -5553,26 +5967,27 @@ public sealed class MainWindow : Window
                 currentButton.IsEnabled = true;
             }
         }, secondary: true);
-        connectionActions.Children.Add(testButton);
-        connectionActions.Children.Add(Button("清空 Key", (_, _) =>
+        AddConnectionAction(testButton);
+        AddConnectionAction(Button("清空 Key", (_, _) =>
         {
             key.Text.Text = "";
             saveStatus.Text = "API Key 已从输入框清空，保存后会更新本地设置。";
             saveStatus.Foreground = Brush("#64748b");
-        }, secondary: true));
+        }, secondary: true), 0);
         connection.Children.Add(connectionActions);
+        connection.Children.Add(saveStatus);
+        connection.Children.Add(RulesEmptyState("测试连接只使用当前输入框内容，不会保存设置；点击“保存 AI 设置”后才会写入本地用户数据目录。"));
 
         var behavior = new StackPanel { Spacing = 12 };
         behavior.Children.Add(Field("对话风格预提示词", style));
         behavior.Children.Add(RenderAiProtocolCard());
-        behavior.Children.Add(saveStatus);
 
-        var saveButton = Button("保存 AI 设置", async (_, _) =>
+        async Task<bool> SaveAiSettingsFromFormAsync()
         {
             if (!TryReadSettingsFromForm(requireKey: false, out var nextSettings, out var message))
             {
                 SetAiFormStatus(message, error: true);
-                return;
+                return false;
             }
 
             _aiSettings = nextSettings;
@@ -5583,7 +5998,17 @@ public sealed class MainWindow : Window
             saveStatus.Foreground = Brush("#16a34a");
             SetStatus("AI 设置已保存到用户数据目录");
             RenderActivePage();
-        });
+            return true;
+        }
+
+        var saveButton = Button("保存 AI 设置", async (_, _) => await SaveAiSettingsFromFormAsync());
+        var saveAndChatButton = Button("保存并打开对话", async (_, _) =>
+        {
+            if (!await SaveAiSettingsFromFormAsync()) return;
+            _activePage = "Chat";
+            _state.Preferences.StartupPage = "Chat";
+            RenderActivePage();
+        }, secondary: true);
 
         var left = new StackPanel { Spacing = 14 };
         left.Children.Add(Card("连接", connection));
@@ -5603,7 +6028,10 @@ public sealed class MainWindow : Window
         columns.Children.Add(left);
         columns.Children.Add(right);
         root.Children.Add(columns);
-        root.Children.Add(saveButton);
+        var bottomActions = new WrapPanel { Orientation = Orientation.Horizontal };
+        AddSelectionAction(bottomActions, saveButton);
+        AddSelectionAction(bottomActions, saveAndChatButton, 0);
+        root.Children.Add(bottomActions);
         return Scroll(root);
     }
 
@@ -5659,6 +6087,7 @@ public sealed class MainWindow : Window
         root.Children.Add(AiInfoRow("保存位置", Path.Combine(_store.DataDirectory, "ai-settings.local.json")));
         root.Children.Add(AiInfoRow("仓库状态", ".env 和 publish 目录已忽略"));
         root.Children.Add(AiInfoRow("可见内容", "聊天窗口只显示回复文字和可应用预览"));
+        root.Children.Add(AiInfoRow("测试连接", "只读取当前输入框，不会保存 API Key"));
         root.Children.Add(Button("复制数据目录", async (_, _) =>
         {
             await (Clipboard?.SetTextAsync(_store.DataDirectory) ?? Task.CompletedTask);
@@ -6038,9 +6467,55 @@ public sealed class MainWindow : Window
         return await dialog.ShowDialog<bool>(this);
     }
 
+    private int SelectedEditableBlockCount()
+    {
+        return _daySchedule.Blocks.Count(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable);
+    }
+
+    private void AddDaySelectionContextMenuItems(ContextMenu menu, ScheduleBlock block)
+    {
+        var selectedEditableCount = SelectedEditableBlockCount();
+        var useBatchSelection = _selectedRuntimeIds.Contains(block.RuntimeId) && selectedEditableCount > 1;
+
+        if (useBatchSelection)
+        {
+            var moveUp = new MenuItem { Header = "选中项上移 15 分钟" };
+            moveUp.Click += (_, _) => MoveSelected(-15);
+            var moveDown = new MenuItem { Header = "选中项下移 15 分钟" };
+            moveDown.Click += (_, _) => MoveSelected(15);
+            menu.Items.Add(moveUp);
+            menu.Items.Add(moveDown);
+        }
+
+        var delete = new MenuItem { Header = useBatchSelection ? $"删除选中 {selectedEditableCount} 个" : "删除" };
+        delete.Click += async (_, _) =>
+        {
+            if (useBatchSelection)
+            {
+                await DeleteSelectedAsync();
+                return;
+            }
+
+            _selectedRuntimeIds.Clear();
+            _selectedRuntimeIds.Add(block.RuntimeId);
+            await DeleteSelectedAsync(confirmMulti: false);
+        };
+        menu.Items.Add(delete);
+
+        if (!useBatchSelection) return;
+
+        var clearSelection = new MenuItem { Header = "取消选择" };
+        clearSelection.Click += (_, _) =>
+        {
+            _selectedRuntimeIds.Clear();
+            RenderActivePage();
+        };
+        menu.Items.Add(clearSelection);
+    }
+
     private void MoveSelected(int deltaMinutes)
     {
-        var selectedCount = _daySchedule.Blocks.Count(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable);
+        var selectedCount = SelectedEditableBlockCount();
         if (selectedCount == 0) return;
 
         CaptureUndo("批量调整");
@@ -6058,7 +6533,7 @@ public sealed class MainWindow : Window
 
     private async Task DeleteSelectedAsync(bool confirmMulti = true)
     {
-        var selectedCount = _daySchedule.Blocks.Count(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable);
+        var selectedCount = SelectedEditableBlockCount();
         if (selectedCount == 0) return;
         if (confirmMulti && selectedCount > 1 && !await ConfirmDeleteSelectedAsync(selectedCount))
         {
@@ -6112,17 +6587,14 @@ public sealed class MainWindow : Window
         if (_dayCanvas is null || args.Source is not Canvas) return;
         if (!args.GetCurrentPoint(_dayCanvas).Properties.IsLeftButtonPressed) return;
         _isBoxSelecting = true;
+        _selectionMoved = false;
         _selectionStart = args.GetPosition(_dayCanvas);
-        _selectedRuntimeIds.Clear();
         _selectionBox = new Border
         {
             BorderBrush = Brush("#2563eb"),
             BorderThickness = new Thickness(1),
             Background = Brush("#bfdbfe66")
         };
-        Canvas.SetLeft(_selectionBox, _selectionStart.X);
-        Canvas.SetTop(_selectionBox, _selectionStart.Y);
-        _dayCanvas.Children.Add(_selectionBox);
         args.Handled = true;
     }
 
@@ -6130,20 +6602,41 @@ public sealed class MainWindow : Window
     {
         if (!_isBoxSelecting || _dayCanvas is null || _selectionBox is null) return;
         var current = args.GetPosition(_dayCanvas);
+        var deltaX = Math.Abs(current.X - _selectionStart.X);
+        var deltaY = Math.Abs(current.Y - _selectionStart.Y);
+        if (!_selectionMoved)
+        {
+            if (Math.Max(deltaX, deltaY) < SelectionDragThreshold)
+            {
+                args.Handled = true;
+                return;
+            }
+
+            _selectionMoved = true;
+            _selectedRuntimeIds.Clear();
+            _dayCanvas.Children.Add(_selectionBox);
+        }
+
         var left = Math.Min(_selectionStart.X, current.X);
         var top = Math.Min(_selectionStart.Y, current.Y);
-        var width = Math.Abs(current.X - _selectionStart.X);
-        var height = Math.Abs(current.Y - _selectionStart.Y);
         Canvas.SetLeft(_selectionBox, left);
         Canvas.SetTop(_selectionBox, top);
-        _selectionBox.Width = width;
-        _selectionBox.Height = height;
+        _selectionBox.Width = deltaX;
+        _selectionBox.Height = deltaY;
         args.Handled = true;
     }
 
     private void FinishBoxSelection(object? sender, PointerReleasedEventArgs args)
     {
         if (!_isBoxSelecting || _dayCanvas is null || _selectionBox is null) return;
+        if (!_selectionMoved)
+        {
+            _selectionBox = null;
+            _isBoxSelecting = false;
+            args.Handled = true;
+            return;
+        }
+
         var rect = new Rect(Canvas.GetLeft(_selectionBox), Canvas.GetTop(_selectionBox), _selectionBox.Width, _selectionBox.Height);
         foreach (var border in _dayCanvas.Children.OfType<Border>().Where(item => item.Tag is string))
         {
@@ -6156,6 +6649,7 @@ public sealed class MainWindow : Window
         _dayCanvas.Children.Remove(_selectionBox);
         _selectionBox = null;
         _isBoxSelecting = false;
+        _selectionMoved = false;
         RenderActivePage();
         args.Handled = true;
     }
@@ -6315,6 +6809,7 @@ public sealed class MainWindow : Window
         };
         button.HorizontalAlignment = HorizontalAlignment.Stretch;
         button.HorizontalContentAlignment = HorizontalAlignment.Left;
+        button.VerticalContentAlignment = VerticalAlignment.Center;
         button.Margin = new Thickness(0, 0, 0, 4);
         return button;
     }

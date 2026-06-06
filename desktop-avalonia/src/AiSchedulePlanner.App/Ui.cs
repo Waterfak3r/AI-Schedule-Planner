@@ -27,7 +27,9 @@ internal static class Ui
             Foreground = Brush(danger ? "#ffffff" : secondary ? "#0f172a" : "#ffffff"),
             BorderBrush = Brush(danger ? "#dc2626" : secondary ? "#cbd5e1" : "#2563eb"),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(6)
+            CornerRadius = new CornerRadius(6),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
         };
 
         if (onClick is not null)
