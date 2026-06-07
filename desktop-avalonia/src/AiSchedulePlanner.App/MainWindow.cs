@@ -516,6 +516,9 @@ public sealed class MainWindow : Window
             case "advanced":
                 ApplyPageReviewScenario("Advanced");
                 break;
+            case "community":
+                ApplyCommunityReviewScenario();
+                break;
         }
     }
 
@@ -541,6 +544,34 @@ public sealed class MainWindow : Window
         ApplySidebarLayout();
         UpdateNavigationVisualState();
         _selectedRuntimeIds.Clear();
+        RebuildSchedules();
+        RenderActivePage();
+    }
+
+    private void ApplyCommunityReviewScenario()
+    {
+        _activePage = "Community";
+        _state.Preferences.StartupPage = "Community";
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+        _state.CommunityPosts =
+        [
+            new CommunityPost
+            {
+                Text = "考试周把固定事项先录进去，再让 AI 安排复习块。",
+                Likes = 4,
+                CreatedAt = new DateTimeOffset(2026, 6, 7, 9, 30, 0, TimeSpan.Zero)
+            },
+            new CommunityPost
+            {
+                Text = "晚上的任务别排太满，给通勤和吃饭留缓冲。",
+                Likes = 2,
+                CreatedAt = new DateTimeOffset(2026, 6, 6, 21, 10, 0, TimeSpan.Zero)
+            }
+        ];
         RebuildSchedules();
         RenderActivePage();
     }
@@ -953,8 +984,31 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildCommunityAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildCommunityAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Community") return [];
+
+        var summary = visibleControls.FirstOrDefault(control => Equals(control.Tag, "community-summary"));
+        var composer = visibleControls.FirstOrDefault(control => Equals(control.Tag, "community-composer"));
+        var postCards = visibleControls.Where(control => Equals(control.Tag, "community-post-card")).ToList();
+        var postActions = visibleControls.Where(control => Equals(control.Tag, "community-post-actions")).ToList();
+
+        return
+        [
+            $"community_summary_visible: {summary is not null}",
+            $"community_composer_visible: {composer is not null}",
+            $"community_post_card_count: {postCards.Count}",
+            $"community_post_actions_wrap_panel_count: {postActions.OfType<WrapPanel>().Count()}",
+            $"community_post_actions_wrap_panel_pass: {postCards.Count == 0 || postActions.OfType<WrapPanel>().Count() == postCards.Count}"
+        ];
     }
 
     private IReadOnlyList<string> BuildAdvancedAuditRows(IReadOnlyList<Control> visibleControls)
@@ -7316,7 +7370,9 @@ public sealed class MainWindow : Window
         Grid.SetColumn(publish, 1);
         composerActions.Children.Add(publish);
         composer.Children.Add(composerActions);
-        root.Children.Add(Card("发布", composer));
+        var composerCard = Card("发布", composer);
+        composerCard.Tag = "community-composer";
+        root.Children.Add(composerCard);
 
         var posts = _state.CommunityPosts.OrderByDescending(item => item.CreatedAt).ToList();
         if (posts.Count == 0)
@@ -7338,6 +7394,7 @@ public sealed class MainWindow : Window
     {
         var today = DateTimeOffset.Now.Date;
         var grid = new UniformGrid { Columns = 3 };
+        grid.Tag = "community-summary";
         grid.Children.Add(StatCard("内容", _state.CommunityPosts.Count.ToString()));
         grid.Children.Add(StatCard("今日新增", _state.CommunityPosts.Count(item => item.CreatedAt.LocalDateTime.Date == today).ToString()));
         grid.Children.Add(StatCard("总赞", _state.CommunityPosts.Sum(item => item.Likes).ToString()));
@@ -7357,30 +7414,33 @@ public sealed class MainWindow : Window
         root.Children.Add(head);
         root.Children.Add(Text(post.Text, 14, "#111827"));
 
-        var actions = new StackPanel
+        var actions = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right,
-            Spacing = 8
+            Tag = "community-post-actions"
         };
-        actions.Children.Add(Button("赞", (_, _) =>
+        var like = Button("赞", (_, _) =>
         {
             post.Likes += 1;
             SetStatus("已点赞，正在自动保存");
             QueueStateAutosave("点赞已自动保存");
             RenderActivePage();
-        }, secondary: true));
-        actions.Children.Add(Button("删除", (_, _) =>
+        }, secondary: true);
+        var delete = Button("删除", (_, _) =>
         {
             _state.CommunityPosts.Remove(post);
             SetStatus("已删除社区内容，正在自动保存");
             QueueStateAutosave("社区内容删除已自动保存");
             RenderActivePage();
-        }, danger: true));
+        }, danger: true);
+        AddSelectionAction(actions, like);
+        AddSelectionAction(actions, delete, 0);
         root.Children.Add(actions);
 
         return new Border
         {
+            Tag = "community-post-card",
             Background = Brush("#ffffff"),
             BorderBrush = Brush("#e5e7eb"),
             BorderThickness = new Thickness(1),
