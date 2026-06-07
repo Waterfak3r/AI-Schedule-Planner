@@ -48,6 +48,7 @@ public sealed class MainWindow : Window
     private const double SidebarExpandedWidth = 248;
     private const double SidebarCollapsedWidth = 76;
     private const double ScheduleAutoCollapsePanelViewportWidth = 900;
+    private const double ScheduleAutoCollapseSidebarWindowWidth = 1080;
 
     private readonly IPlannerStore _store;
     private readonly IScheduleEngine _scheduleEngine = new ScheduleEngine();
@@ -67,6 +68,7 @@ public sealed class MainWindow : Window
     private readonly HashSet<string> _selectedRuntimeIds = [];
     private bool _chatBusy;
     private bool _schedulePanelPinnedOpenForNarrow;
+    private bool _sidebarPinnedOpenForNarrow;
     private int _autosaveVersion;
     private int _statusToastVersion;
     private int _monthFocusVersion;
@@ -295,6 +297,28 @@ public sealed class MainWindow : Window
 
     private void ToggleSidebarCollapsed()
     {
+        var autoEligible = IsSidebarAutoCollapseEligible();
+        var wasPreferenceCollapsed = _sidebarCollapsed;
+        if (IsSidebarEffectivelyCollapsed() && autoEligible)
+        {
+            _sidebarCollapsed = false;
+            _state.Preferences.SidebarCollapsed = false;
+            _sidebarPinnedOpenForNarrow = true;
+            ApplySidebarLayout();
+            UpdateNavigationVisualState();
+            RenderActivePage();
+            if (wasPreferenceCollapsed)
+            {
+                QueueStateAutosave("侧边栏已展开，并已保存偏好");
+            }
+            else
+            {
+                SetStatus("日程页侧边栏已临时展开");
+            }
+            return;
+        }
+
+        _sidebarPinnedOpenForNarrow = false;
         _sidebarCollapsed = !_sidebarCollapsed;
         _state.Preferences.SidebarCollapsed = _sidebarCollapsed;
         ApplySidebarLayout();
@@ -309,6 +333,10 @@ public sealed class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             if (version != _viewportRefreshVersion) return;
+            if (ResolveWindowViewportWidth() >= ScheduleAutoCollapseSidebarWindowWidth)
+            {
+                _sidebarPinnedOpenForNarrow = false;
+            }
             if (ResolveMainContentViewportWidth() >= ScheduleAutoCollapsePanelViewportWidth)
             {
                 _schedulePanelPinnedOpenForNarrow = false;
@@ -346,14 +374,37 @@ public sealed class MainWindow : Window
             ResolveMainContentViewportWidth() < ScheduleAutoCollapsePanelViewportWidth;
     }
 
-    private double ResolveMainContentViewportWidth()
+    private bool IsSidebarEffectivelyCollapsed()
     {
-        var windowWidth = ClientSize.Width > 1
+        return _sidebarCollapsed || IsSidebarAutoCollapsed();
+    }
+
+    private bool IsSidebarAutoCollapsed()
+    {
+        return !_sidebarCollapsed &&
+            !_sidebarPinnedOpenForNarrow &&
+            IsSidebarAutoCollapseEligible();
+    }
+
+    private bool IsSidebarAutoCollapseEligible()
+    {
+        return _activePage == "Schedule" &&
+            ResolveWindowViewportWidth() < ScheduleAutoCollapseSidebarWindowWidth;
+    }
+
+    private double ResolveWindowViewportWidth()
+    {
+        return ClientSize.Width > 1
             ? ClientSize.Width
             : Bounds.Width > 1
                 ? Bounds.Width
                 : Width;
-        var sidebarWidth = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
+    }
+
+    private double ResolveMainContentViewportWidth()
+    {
+        var windowWidth = ResolveWindowViewportWidth();
+        var sidebarWidth = IsSidebarEffectivelyCollapsed() ? SidebarCollapsedWidth : SidebarExpandedWidth;
         var contentPadding = _activePage == "Schedule" ? 32d : 48d;
         return Math.Max(260, windowWidth - sidebarWidth - contentPadding);
     }
@@ -371,50 +422,51 @@ public sealed class MainWindow : Window
 
     private void ApplySidebarLayout()
     {
+        var collapsed = IsSidebarEffectivelyCollapsed();
         if (_shellRoot is not null)
         {
-            _shellRoot.ColumnDefinitions[0].Width = new GridLength(_sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth);
+            _shellRoot.ColumnDefinitions[0].Width = new GridLength(collapsed ? SidebarCollapsedWidth : SidebarExpandedWidth);
         }
 
         if (_sidebarHost is not null)
         {
-            _sidebarHost.Padding = _sidebarCollapsed ? new Thickness(12, 16) : new Thickness(18);
+            _sidebarHost.Padding = collapsed ? new Thickness(12, 16) : new Thickness(18);
         }
 
         if (_brandTitle is not null)
         {
-            _brandTitle.Text = _sidebarCollapsed ? "AI" : "AI 日程";
-            _brandTitle.FontSize = _sidebarCollapsed ? 16 : 21;
-            _brandTitle.TextAlignment = _sidebarCollapsed ? TextAlignment.Center : TextAlignment.Left;
+            _brandTitle.Text = collapsed ? "AI" : "AI 日程";
+            _brandTitle.FontSize = collapsed ? 16 : 21;
+            _brandTitle.TextAlignment = collapsed ? TextAlignment.Center : TextAlignment.Left;
         }
 
         if (_brandSubtitle is not null)
         {
-            _brandSubtitle.IsVisible = !_sidebarCollapsed;
+            _brandSubtitle.IsVisible = !collapsed;
         }
 
         if (_brandAccent is not null)
         {
-            _brandAccent.IsVisible = !_sidebarCollapsed;
+            _brandAccent.IsVisible = !collapsed;
         }
 
-        _navPanel.Margin = _sidebarCollapsed ? new Thickness(0, 24, 0, 0) : new Thickness(0, 30, 0, 0);
+        _navPanel.Margin = collapsed ? new Thickness(0, 24, 0, 0) : new Thickness(0, 30, 0, 0);
 
         if (_sidebarToggleButton is not null)
         {
             if (_sidebarToggleIcon is not null)
             {
-                _sidebarToggleIcon.Text = _sidebarCollapsed ? ">" : "<";
-                _sidebarToggleIcon.Foreground = Brush(_sidebarCollapsed ? "#dbeafe" : "#ffffff");
+                _sidebarToggleIcon.Text = collapsed ? ">" : "<";
+                _sidebarToggleIcon.Foreground = Brush(collapsed ? "#dbeafe" : "#ffffff");
             }
-            _sidebarToggleButton.Width = _sidebarCollapsed ? 24 : 30;
-            _sidebarToggleButton.Height = _sidebarCollapsed ? 24 : 30;
-            _sidebarToggleButton.MinHeight = _sidebarCollapsed ? 24 : 30;
-            _sidebarToggleButton.Background = Brush(_sidebarCollapsed ? "#00ffffff" : "#26314c");
-            _sidebarToggleButton.BorderBrush = Brush(_sidebarCollapsed ? "#475569" : "#33415f");
-            _sidebarToggleButton.Foreground = Brush(_sidebarCollapsed ? "#dbeafe" : "#ffffff");
-            _sidebarToggleButton.CornerRadius = new CornerRadius(_sidebarCollapsed ? 12 : 7);
-            ToolTip.SetTip(_sidebarToggleButton, _sidebarCollapsed ? "展开侧边栏 Ctrl+B" : "收起侧边栏 Ctrl+B");
+            _sidebarToggleButton.Width = collapsed ? 24 : 30;
+            _sidebarToggleButton.Height = collapsed ? 24 : 30;
+            _sidebarToggleButton.MinHeight = collapsed ? 24 : 30;
+            _sidebarToggleButton.Background = Brush(collapsed ? "#00ffffff" : "#26314c");
+            _sidebarToggleButton.BorderBrush = Brush(collapsed ? "#475569" : "#33415f");
+            _sidebarToggleButton.Foreground = Brush(collapsed ? "#dbeafe" : "#ffffff");
+            _sidebarToggleButton.CornerRadius = new CornerRadius(collapsed ? 12 : 7);
+            ToolTip.SetTip(_sidebarToggleButton, collapsed ? "展开侧边栏 Ctrl+B" : "收起侧边栏 Ctrl+B");
         }
     }
 
@@ -497,6 +549,12 @@ public sealed class MainWindow : Window
         }, DispatcherPriority.Render);
 
         await Task.Delay(100);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            Measure(new Size(width, height));
+            Arrange(new Rect(0, 0, width, height));
+            UpdateLayout();
+        }, DispatcherPriority.Render);
     }
 
     private void ApplyInternalReviewScenario(string scenario)
@@ -977,6 +1035,8 @@ public sealed class MainWindow : Window
             buttonLabels.Contains("展开日历") ||
             visibleControls.Any(control => Equals(control.Tag, "schedule-calendar-toggle"));
         var pageTitle = PageTitle(_activePage);
+        var sidebarEffectiveCollapsed = IsSidebarEffectivelyCollapsed();
+        var sidebarAutoCollapsed = IsSidebarAutoCollapsed();
         var largePageTitleCount = string.IsNullOrWhiteSpace(pageTitle)
             ? 0
             : visibleControls
@@ -989,7 +1049,12 @@ public sealed class MainWindow : Window
         report.AppendLine($"window: {width}x{height}");
         report.AppendLine($"active_page: {_activePage}");
         report.AppendLine($"schedule_view: {_scheduleView}");
-        report.AppendLine($"sidebar: {(_sidebarCollapsed ? "collapsed" : "expanded")}");
+        report.AppendLine($"sidebar: {(sidebarEffectiveCollapsed ? "collapsed" : "expanded")}");
+        report.AppendLine($"sidebar_preference_collapsed: {_sidebarCollapsed}");
+        report.AppendLine($"sidebar_effective_collapsed: {sidebarEffectiveCollapsed}");
+        report.AppendLine($"sidebar_auto_collapsed: {sidebarAutoCollapsed}");
+        report.AppendLine($"sidebar_pinned_open_for_narrow: {_sidebarPinnedOpenForNarrow}");
+        report.AppendLine($"sidebar_auto_collapse_threshold: {ScheduleAutoCollapseSidebarWindowWidth:0.##}");
         report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_panel_effective: {(IsSchedulePanelEffectivelyCollapsed() ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_panel_auto_collapsed: {IsSchedulePanelAutoCollapsed()}");
@@ -1013,7 +1078,7 @@ public sealed class MainWindow : Window
             report.AppendLine($"zero_sized_types: {string.Join(", ", zeroSizedTypes)}");
         }
         report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
-        if (_sidebarCollapsed)
+        if (sidebarEffectiveCollapsed)
         {
             var collapsedNavLabels = _navButtons.Keys
                 .Select(page => _navFullLabels.GetValueOrDefault(page, page))
@@ -1976,6 +2041,11 @@ public sealed class MainWindow : Window
 
     private void RenderActivePage()
     {
+        if (_activePage != "Schedule")
+        {
+            _sidebarPinnedOpenForNarrow = false;
+        }
+
         if (_undoButton is not null)
         {
             var hasUndo = _undoSchedules.Count > 0;
@@ -1983,6 +2053,7 @@ public sealed class MainWindow : Window
             _undoButton.Content = hasUndo ? $"撤销：{_undoDescription}" : "撤销";
         }
 
+        ApplySidebarLayout();
         UpdateNavigationVisualState();
         var schedulePage = _activePage == "Schedule";
         if (_topbarHost is not null)
@@ -2036,25 +2107,26 @@ public sealed class MainWindow : Window
 
     private void UpdateNavigationVisualState()
     {
+        var collapsed = IsSidebarEffectivelyCollapsed();
         foreach (var (page, button) in _navButtons)
         {
             var active = page == _activePage;
             var fullLabel = _navFullLabels.GetValueOrDefault(page, button.Content?.ToString() ?? page);
 
-            button.Content = _sidebarCollapsed ? BuildCollapsedNavIcon(page, active) : fullLabel;
+            button.Content = collapsed ? BuildCollapsedNavIcon(page, active) : fullLabel;
             button.Background = Brush(active ? "#26314c" : "#00ffffff");
             button.Foreground = Brush(active ? "#ffffff" : "#cbd5e1");
             button.BorderBrush = Brush(active ? "#38bdf8" : "#00ffffff");
             button.BorderThickness = new Thickness(active ? 3 : 0, 0, 0, 0);
-            button.Margin = _sidebarCollapsed
+            button.Margin = collapsed
                 ? new Thickness(0, 0, 0, 8)
                 : new Thickness(active ? 10 : 0, 0, active ? 0 : 10, 4);
-            button.Padding = _sidebarCollapsed ? new Thickness(0) : new Thickness(active ? 14 : 12, 8, 12, 8);
-            button.MinHeight = _sidebarCollapsed ? 44 : 0;
-            button.Height = _sidebarCollapsed ? 44 : double.NaN;
-            button.Width = _sidebarCollapsed ? 48 : double.NaN;
-            button.HorizontalAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
-            button.HorizontalContentAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+            button.Padding = collapsed ? new Thickness(0) : new Thickness(active ? 14 : 12, 8, 12, 8);
+            button.MinHeight = collapsed ? 44 : 0;
+            button.Height = collapsed ? 44 : double.NaN;
+            button.Width = collapsed ? 48 : double.NaN;
+            button.HorizontalAlignment = collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
+            button.HorizontalContentAlignment = collapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
             button.VerticalContentAlignment = VerticalAlignment.Center;
             ToolTip.SetTip(button, fullLabel);
         }
