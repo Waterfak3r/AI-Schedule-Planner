@@ -1189,6 +1189,8 @@ public sealed class MainWindow : Window
         var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-main-column"));
         var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-side-column"));
         var localActions = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-local-actions"));
+        var comboBoxes = visibleControls.OfType<ComboBox>().ToList();
+        var darkComboBoxCount = comboBoxes.Count(comboBox => IsDarkSolidBrush(comboBox.Background));
         var mainPoint = mainColumn?.TranslatePoint(new Point(0, 0), this);
         var sidePoint = sideColumn?.TranslatePoint(new Point(0, 0), this);
         var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
@@ -1205,7 +1207,10 @@ public sealed class MainWindow : Window
             $"advanced_columns_stacked: {stacked}",
             $"advanced_columns_stack_pass: {stacked == compactExpected}",
             $"advanced_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 340)}",
-            $"advanced_local_actions_wrap_panel: {localActions is WrapPanel}"
+            $"advanced_local_actions_wrap_panel: {localActions is WrapPanel}",
+            $"advanced_combobox_count: {comboBoxes.Count}",
+            $"advanced_dark_combobox_count: {darkComboBoxCount}",
+            $"advanced_combobox_background_pass: {comboBoxes.Count == 0 || darkComboBoxCount == 0}"
         ];
     }
 
