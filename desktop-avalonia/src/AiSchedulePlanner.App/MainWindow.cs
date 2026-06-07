@@ -973,13 +973,23 @@ public sealed class MainWindow : Window
         report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
         if (_sidebarCollapsed)
         {
-            var collapsedNavLabels = _navButtons
-                .Select(item => ControlText(item.Value.Content))
-                .Where(text => !string.IsNullOrWhiteSpace(text))
-                .Select(text => text.ReplaceLineEndings(" ").Trim())
+            var collapsedNavLabels = _navButtons.Keys
+                .Select(page => _navFullLabels.GetValueOrDefault(page, page))
                 .ToList();
+            var collapsedNavIconCount = _navButtons.Values.Count(button =>
+                button.GetVisualDescendants().OfType<Control>().Any(control => Equals(control.Tag, "collapsed-nav-icon")));
+            var collapsedTextLabelCount = _navButtons.Values.Sum(button =>
+                button.GetVisualDescendants().OfType<TextBlock>().Count(text => Equals(text.Tag, "collapsed-nav-label")));
+            var collapsedAiHorizontal = _navButtons.TryGetValue("Ai", out var aiButton) &&
+                aiButton.GetVisualDescendants()
+                    .OfType<TextBlock>()
+                    .Any(text => Equals(text.Tag, "collapsed-nav-icon") && string.Equals(text.Text, "AI", StringComparison.Ordinal));
             var collapsedNavFixedHeight = _navButtons.Values.All(button => Math.Abs(button.Bounds.Height - 44) <= 0.5);
             report.AppendLine($"collapsed_nav_labels: {string.Join(" | ", collapsedNavLabels)}");
+            report.AppendLine($"collapsed_nav_icon_count: {collapsedNavIconCount}");
+            report.AppendLine($"collapsed_nav_uses_icons: {collapsedNavIconCount == _navButtons.Count}");
+            report.AppendLine($"collapsed_nav_text_labels_visible: {collapsedTextLabelCount > 0}");
+            report.AppendLine($"collapsed_nav_ai_horizontal: {collapsedAiHorizontal}");
             report.AppendLine($"collapsed_nav_fixed_height: {collapsedNavFixedHeight}");
         }
         report.AppendLine($"has_exact_save_button: {hasExactSaveButton}");
@@ -1504,6 +1514,8 @@ public sealed class MainWindow : Window
             TextBlock textBlock => textBlock.Text ?? "",
             ContentControl contentControl => ControlText(contentControl.Content),
             Decorator decorator => ControlText(decorator.Child),
+            Avalonia.Controls.Shapes.Shape => "",
+            Control control when control.GetType().Name == "PathIcon" => "",
             Panel panel => string.Join("", panel.Children.Select(ControlText)),
             _ => content.ToString() ?? ""
         };
@@ -1858,9 +1870,8 @@ public sealed class MainWindow : Window
         {
             var active = page == _activePage;
             var fullLabel = _navFullLabels.GetValueOrDefault(page, button.Content?.ToString() ?? page);
-            var collapsedLabel = CollapsedNavLabel(page, fullLabel);
 
-            button.Content = _sidebarCollapsed ? BuildCollapsedNavLabel(collapsedLabel, active) : fullLabel;
+            button.Content = _sidebarCollapsed ? BuildCollapsedNavIcon(page, active) : fullLabel;
             button.Background = Brush(active ? "#26314c" : "#00ffffff");
             button.Foreground = Brush(active ? "#ffffff" : "#cbd5e1");
             button.BorderBrush = Brush(active ? "#38bdf8" : "#00ffffff");
@@ -1879,27 +1890,55 @@ public sealed class MainWindow : Window
         }
     }
 
-    private static TextBlock BuildCollapsedNavLabel(string label, bool active)
+    private static Control BuildCollapsedNavIcon(string page, bool active)
     {
-        return new TextBlock
+        var color = active ? "#ffffff" : "#cbd5e1";
+        if (page == "Ai")
         {
-            Text = label,
-            FontSize = label.Length > 2 ? 11 : 12,
-            LineHeight = 14,
-            FontWeight = FontWeight.SemiBold,
-            Foreground = Brush(active ? "#ffffff" : "#cbd5e1"),
-            TextAlignment = TextAlignment.Center,
+            return new TextBlock
+            {
+                Tag = "collapsed-nav-icon",
+                Text = "AI",
+                FontSize = 12,
+                LineHeight = 14,
+                FontWeight = FontWeight.SemiBold,
+                Foreground = Brush(color),
+                TextAlignment = TextAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.NoWrap
+            };
+        }
+
+        return new Avalonia.Controls.Shapes.Path
+        {
+            Tag = "collapsed-nav-icon",
+            Data = StreamGeometry.Parse(CollapsedNavIconData(page)),
+            Width = 19,
+            Height = 19,
+            Stretch = Stretch.Uniform,
+            Stroke = Brush(color),
+            StrokeThickness = 1.9,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            Fill = null,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextWrapping = TextWrapping.NoWrap
+            VerticalAlignment = VerticalAlignment.Center
         };
     }
 
-    private static string CollapsedNavLabel(string page, string fullLabel)
+    private static string CollapsedNavIconData(string page)
     {
-        if (page == "Ai") return "AI";
-        var compact = fullLabel.Replace(" ", "", StringComparison.Ordinal);
-        return compact.Length <= 2 ? compact : compact[..2];
+        return page switch
+        {
+            "Overview" => "M4 5h7v7H4z M13 5h7v4h-7z M13 11h7v8h-7z M4 14h7v5H4z",
+            "Chat" => "M4 5h16v10H8l-4 4z",
+            "Schedule" => "M5 6h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M3 10h18 M8 3v4 M16 3v4",
+            "Rules" => "M5 7l2 2 4-4 M13 7h7 M5 14l2 2 4-4 M13 14h7 M5 20h15",
+            "Community" => "M8 11a3 3 0 1 0 0-6a3 3 0 0 0 0 6 M16 11a3 3 0 1 0 0-6a3 3 0 0 0 0 6 M3 21a5 5 0 0 1 10 0 M11 21a5 5 0 0 1 10 0",
+            "Advanced" => "M4 6h10 M18 6h2 M14 4v4 M4 12h2 M10 12h10 M8 10v4 M4 18h10 M18 18h2 M14 16v4",
+            _ => "M12 5v14 M5 12h14"
+        };
     }
 
     private Control RenderOverview()
