@@ -69,7 +69,7 @@ public sealed class MainWindow : Window
     private int _statusToastVersion;
     private int _monthFocusVersion;
     private int _agendaSelectVersion;
-    private int _scheduleViewportVersion;
+    private int _viewportRefreshVersion;
     private string _rulesFilter = "";
     private Button? _undoButton;
     private Grid? _shellRoot;
@@ -152,7 +152,7 @@ public sealed class MainWindow : Window
         Background = Brush("#eef2f7");
         Content = BuildShell();
         Loaded += (_, _) => _loadTask ??= LoadAsync();
-        SizeChanged += (_, _) => QueueScheduleViewportRefresh();
+        SizeChanged += (_, _) => QueueViewportRefresh();
         KeyDown += HandleWindowKeyDown;
     }
 
@@ -296,26 +296,27 @@ public sealed class MainWindow : Window
         _state.Preferences.SidebarCollapsed = _sidebarCollapsed;
         ApplySidebarLayout();
         UpdateNavigationVisualState();
-        if (_activePage == "Schedule")
-        {
-            RenderActivePage();
-        }
+        RenderActivePage();
         QueueStateAutosave(_sidebarCollapsed ? "侧边栏已收起，并已保存偏好" : "侧边栏已展开，并已保存偏好");
     }
 
-    private void QueueScheduleViewportRefresh()
+    private void QueueViewportRefresh()
     {
-        if (_activePage != "Schedule") return;
-
-        var version = ++_scheduleViewportVersion;
+        var version = ++_viewportRefreshVersion;
         Dispatcher.UIThread.Post(() =>
         {
-            if (version != _scheduleViewportVersion || _activePage != "Schedule") return;
+            if (version != _viewportRefreshVersion) return;
             RenderActivePage();
         }, DispatcherPriority.Background);
     }
 
     private double ResolveScheduleCalendarViewportWidth()
+    {
+        var schedulePanelWidth = _state.Preferences.SchedulePanelCollapsed ? 0d : 256d;
+        return Math.Max(260, ResolveMainContentViewportWidth() - schedulePanelWidth - 4);
+    }
+
+    private double ResolveMainContentViewportWidth()
     {
         var windowWidth = ClientSize.Width > 1
             ? ClientSize.Width
@@ -324,8 +325,7 @@ public sealed class MainWindow : Window
                 : Width;
         var sidebarWidth = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
         var contentPadding = _activePage == "Schedule" ? 32d : 48d;
-        var schedulePanelWidth = _state.Preferences.SchedulePanelCollapsed ? 0d : 256d;
-        return Math.Max(260, windowWidth - sidebarWidth - contentPadding - schedulePanelWidth - 4);
+        return Math.Max(260, windowWidth - sidebarWidth - contentPadding);
     }
 
     private double ResolveDayEventWidth()
@@ -454,10 +454,9 @@ public sealed class MainWindow : Window
     private async Task PrepareInternalReviewAsync(int width, int height, string scenario)
     {
         await EnsureLoadedAsync();
-        ApplyInternalReviewScenario(scenario);
-
         Width = width;
         Height = height;
+        ApplyInternalReviewScenario(scenario);
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             Measure(new Size(width, height));
@@ -902,7 +901,7 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
-        foreach (var row in BuildChatAuditRows(visibleTexts, buttonLabels))
+        foreach (var row in BuildChatAuditRows(visibleControls, visibleTexts, buttonLabels))
         {
             report.AppendLine(row);
         }
@@ -1107,10 +1106,12 @@ public sealed class MainWindow : Window
         ];
     }
 
-    private IReadOnlyList<string> BuildChatAuditRows(IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
+    private IReadOnlyList<string> BuildChatAuditRows(IReadOnlyList<Control> visibleControls, IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
     {
         if (_activePage != "Chat") return [];
 
+        var messagePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-message-panel"));
+        var sidePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-side-panel"));
         var warningTexts = visibleTexts
             .Where(IsAiWarningPreviewText)
             .Distinct()
@@ -1128,6 +1129,9 @@ public sealed class MainWindow : Window
             $"chat_preview_warning_actions: {CountWarningActions(aggregatePreview)}",
             $"chat_warning_texts_visible: {warningTexts.Count}",
             $"chat_warning_texts: {string.Join(" | ", warningTexts)}",
+            $"chat_message_panel_width: {(messagePanel?.Bounds.Width ?? 0):0.##}",
+            $"chat_side_panel_width: {(sidePanel?.Bounds.Width ?? 0):0.##}",
+            $"chat_message_panel_min_width_pass: {(messagePanel?.Bounds.Width ?? 0) >= 320}",
             $"chat_apply_button: {applyButton}"
         ];
     }
@@ -1845,19 +1849,23 @@ public sealed class MainWindow : Window
 
     private Control RenderChat()
     {
+        var contentWidth = ResolveMainContentViewportWidth();
+        var compact = contentWidth < 760;
+        var sideWidth = compact ? 280 : 340;
         var root = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,*,Auto"),
             RowSpacing = 12
         };
-        var topStrip = RenderChatTopStrip();
+        var topStrip = RenderChatTopStrip(compact);
         Grid.SetRow(topStrip, 0);
         root.Children.Add(topStrip);
 
         var workArea = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,340"),
-            ColumnSpacing = 14
+            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
+            ColumnSpacing = compact ? 12 : 14,
+            Tag = "chat-work-area"
         };
 
         var messages = new StackPanel { Spacing = 10 };
@@ -1874,6 +1882,7 @@ public sealed class MainWindow : Window
         };
         var messagePanel = new Border
         {
+            Tag = "chat-message-panel",
             Background = Brush("#f8fafc"),
             BorderBrush = Brush("#dadce0"),
             BorderThickness = new Thickness(1),
@@ -1885,6 +1894,7 @@ public sealed class MainWindow : Window
         workArea.Children.Add(messagePanel);
 
         var sidePanel = _pendingActions.Count > 0 ? BuildActionPreview() : RenderChatContextPanel();
+        sidePanel.Tag = "chat-side-panel";
         Grid.SetColumn(sidePanel, 1);
         workArea.Children.Add(sidePanel);
 
@@ -1893,7 +1903,7 @@ public sealed class MainWindow : Window
 
         var input = new TextBox
         {
-            Watermark = "例如：这周日晚上七点半要到教一601考试，大概九点去居酒屋",
+            Watermark = compact ? "说出要新增、移动或删除的日程" : "例如：这周日晚上七点半要到教一601考试，大概九点去居酒屋",
             MinHeight = 64,
             MaxHeight = 140,
             AcceptsReturn = true,
@@ -1942,7 +1952,7 @@ public sealed class MainWindow : Window
         }
         var inputRow = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,96")
+            ColumnDefinitions = new ColumnDefinitions($"*,{(compact ? 82 : 96)}")
         };
         Grid.SetColumn(input, 0);
         Grid.SetColumn(send, 1);
@@ -1966,7 +1976,7 @@ public sealed class MainWindow : Window
         return root;
     }
 
-    private Control RenderChatTopStrip()
+    private Control RenderChatTopStrip(bool compact)
     {
         var completion = GetCompletionStats(_daySchedule);
         var visibleCount = _daySchedule.Blocks.Count(IsVisibleBlock);
@@ -1985,13 +1995,13 @@ public sealed class MainWindow : Window
         Grid.SetColumn(pills, 0);
         row.Children.Add(pills);
 
-        var schedule = Button("打开日程", (_, _) =>
+        var schedule = Button(compact ? "日程" : "打开日程", (_, _) =>
         {
             _activePage = "Schedule";
             _state.Preferences.StartupPage = "Schedule";
             RenderActivePage();
         }, secondary: true);
-        var settings = Button("AI 设置", (_, _) =>
+        var settings = Button(compact ? "AI" : "AI 设置", (_, _) =>
         {
             _activePage = "Ai";
             _state.Preferences.StartupPage = "Ai";
@@ -2004,6 +2014,11 @@ public sealed class MainWindow : Window
             SetStatus("对话已清空");
             RenderActivePage();
         }, secondary: true);
+        foreach (var button in new[] { schedule, settings, clear })
+        {
+            button.Padding = compact ? new Thickness(9, 6) : button.Padding;
+            button.MinHeight = compact ? 32 : button.MinHeight;
+        }
         Grid.SetColumn(schedule, 1);
         Grid.SetColumn(settings, 2);
         Grid.SetColumn(clear, 3);
