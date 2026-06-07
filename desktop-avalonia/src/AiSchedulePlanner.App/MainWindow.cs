@@ -597,6 +597,9 @@ public sealed class MainWindow : Window
             case "schedule-month":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Month, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
                 break;
+            case "schedule-month-unscheduled":
+                ApplyMonthUnscheduledReviewScenario();
+                break;
             case "schedule-stale-override":
                 ApplyScheduleStaleOverrideReviewScenario();
                 break;
@@ -868,6 +871,46 @@ public sealed class MainWindow : Window
         RenderActivePage();
     }
 
+    private void ApplyMonthUnscheduledReviewScenario()
+    {
+        _activePage = "Schedule";
+        _scheduleView = ScheduleViewMode.Month;
+        _focusDate = new DateOnly(2026, 6, 7);
+        _state.Preferences.SchedulePanelCollapsed = false;
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+
+        var schedule = new DaySchedule
+        {
+            Date = _focusDate,
+            Blocks =
+            [
+                new ScheduleBlock
+                {
+                    RuntimeId = "month-unscheduled-visible",
+                    Type = ScheduleBlockType.Task,
+                    Title = "已排入复习",
+                    Category = "study",
+                    StartMin = 8 * 60,
+                    EndMin = 9 * 60,
+                    Editable = true
+                }
+            ],
+            Unscheduled =
+            [
+                new TaskRule { Id = "month-unscheduled-paper", Title = "论文初稿", DurationMin = 180, Category = "study", Priority = 5, DaysOfWeek = [0] },
+                new TaskRule { Id = "month-unscheduled-code", Title = "项目重构", DurationMin = 120, Category = "code", Priority = 4, DaysOfWeek = [0] }
+            ]
+        };
+        schedule.Summary = BuildSummaryForReview(schedule);
+        StoreDayOverride(schedule);
+        RebuildSchedules();
+        RenderActivePage();
+    }
+
     private void ApplyScheduleStaleOverrideReviewScenario()
     {
         _activePage = "Schedule";
@@ -1015,6 +1058,7 @@ public sealed class MainWindow : Window
     {
         var schedule = BuildScheduleForDate(_focusDate).Clone();
         schedule.Blocks.RemoveAll(block => block.RuntimeId.StartsWith("review-month-", StringComparison.OrdinalIgnoreCase));
+        schedule.Unscheduled.RemoveAll(task => task.Id.StartsWith("review-month-unscheduled-", StringComparison.OrdinalIgnoreCase));
         for (var index = 0; index < 6; index++)
         {
             var start = 8 * 60 + index * 35;
@@ -1031,6 +1075,28 @@ public sealed class MainWindow : Window
         }
 
         schedule.Blocks = [.. schedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
+        schedule.Unscheduled.AddRange(
+        [
+            new TaskRule
+            {
+                Id = "review-month-unscheduled-paper",
+                Title = "自动排程未排入论文",
+                DurationMin = 180,
+                Category = "study",
+                Priority = 5,
+                DaysOfWeek = [(int)_focusDate.DayOfWeek]
+            },
+            new TaskRule
+            {
+                Id = "review-month-unscheduled-project",
+                Title = "自动排程未排入项目",
+                DurationMin = 120,
+                Category = "code",
+                Priority = 4,
+                DaysOfWeek = [(int)_focusDate.DayOfWeek]
+            }
+        ]);
+        schedule.Summary = BuildSummaryForReview(schedule);
         StoreDayOverride(schedule);
     }
 
@@ -1616,6 +1682,95 @@ public sealed class MainWindow : Window
         return fromPoint is null || toPoint is null ? double.NaN : toPoint.Value.Y - fromPoint.Value.Y;
     }
 
+    private int CountMonthTaggedOverlaps(IReadOnlyList<Control> sourceControls, IReadOnlyList<Control> targetControls)
+    {
+        var overlaps = 0;
+        foreach (var source in sourceControls)
+        {
+            if (!TryGetMonthTaggedDate(source, "month-unscheduled:", out var sourceDate)) continue;
+
+            var sourceBounds = GetControlBoundsInWindow(source);
+            if (sourceBounds is null) continue;
+
+            foreach (var target in targetControls)
+            {
+                if (!TryGetMonthTaggedDate(target, "month-chip:", out var targetDate) &&
+                    !TryGetMonthTaggedDate(target, "month-more:", out targetDate))
+                {
+                    continue;
+                }
+
+                if (sourceDate != targetDate) continue;
+
+                var targetBounds = GetControlBoundsInWindow(target);
+                if (targetBounds is not null && sourceBounds.Value.Intersects(targetBounds.Value))
+                {
+                    overlaps++;
+                }
+            }
+        }
+
+        return overlaps;
+    }
+
+    private Rect? GetControlBoundsInWindow(Control control)
+    {
+        var point = control.TranslatePoint(new Point(0, 0), this);
+        return point is null ? null : new Rect(point.Value, control.Bounds.Size);
+    }
+
+    private static int CountControlsOutsideTaggedDayCell(IReadOnlyList<Control> controls)
+    {
+        var count = 0;
+        foreach (var control in controls)
+        {
+            var dayCell = control.GetVisualAncestors()
+                .OfType<Border>()
+                .FirstOrDefault(border => border.Tag is DateOnly);
+            if (dayCell is null)
+            {
+                count++;
+                continue;
+            }
+
+            var point = control.TranslatePoint(new Point(0, 0), dayCell);
+            if (point is null)
+            {
+                count++;
+                continue;
+            }
+
+            const double tolerance = 0.5;
+            if (point.Value.X < -tolerance ||
+                point.Value.Y < -tolerance ||
+                point.Value.X + control.Bounds.Width > dayCell.Bounds.Width + tolerance ||
+                point.Value.Y + control.Bounds.Height > dayCell.Bounds.Height + tolerance)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static bool TryGetMonthTaggedDate(Control control, string prefix, out DateOnly date)
+    {
+        date = default;
+        if (control.Tag is not string tag ||
+            !tag.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+            tag.Length < prefix.Length + 10)
+        {
+            return false;
+        }
+
+        return DateOnly.TryParseExact(
+            tag.Substring(prefix.Length, 10),
+            "yyyy-MM-dd",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out date);
+    }
+
     private static double MeasureNaturalTextWidth(TextBlock? text)
     {
         if (text is null || string.IsNullOrEmpty(text.Text)) return 0;
@@ -1773,6 +1928,40 @@ public sealed class MainWindow : Window
         var moreButtons = visibleControls
             .Where(control => control.Tag is string tag && tag.StartsWith("month-more:", StringComparison.OrdinalIgnoreCase))
             .ToList();
+        var unscheduledPills = visibleControls
+            .Where(control => control.Tag is string tag && tag.StartsWith("month-unscheduled:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var schedulesByDate = dayCellDates.ToDictionary(date => date, BuildScheduleForDate);
+        var unscheduledByDate = schedulesByDate
+            .Where(pair => pair.Value.Unscheduled.Count > 0)
+            .OrderBy(pair => pair.Key)
+            .ToList();
+        var unscheduledCountsByDate = unscheduledByDate.ToDictionary(pair => pair.Key, pair => pair.Value.Unscheduled.Count);
+        var expectedUnscheduledDates = unscheduledByDate.Select(pair => pair.Key).ToList();
+        var unscheduledTotalCount = unscheduledByDate.Sum(pair => pair.Value.Unscheduled.Count);
+        var unscheduledPillDates = unscheduledPills
+            .Select(control => TryGetMonthTaggedDate(control, "month-unscheduled:", out var date) ? date : (DateOnly?)null)
+            .Where(date => date.HasValue)
+            .Select(date => date!.Value)
+            .OrderBy(date => date)
+            .ToList();
+        var unscheduledPillTexts = unscheduledPills
+            .Select(control => ControlText(control).Trim())
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .ToList();
+        var unscheduledPillTextPass = unscheduledPills.All(control =>
+            TryGetMonthTaggedDate(control, "month-unscheduled:", out var date) &&
+            unscheduledCountsByDate.TryGetValue(date, out var count) &&
+            ControlText(control).Contains("未排入", StringComparison.OrdinalIgnoreCase) &&
+            ControlText(control).Contains(count.ToString(), StringComparison.OrdinalIgnoreCase));
+        var unscheduledPillZeroSizedCount = unscheduledPills.Count(control => control.Bounds.Width <= 0 || control.Bounds.Height <= 0);
+        var unscheduledPillOverlapCount = CountMonthTaggedOverlaps(unscheduledPills, chips.Concat(moreButtons).ToList());
+        var unscheduledNotEventChipPass = unscheduledPills.All(control =>
+                control.Tag is string tag && tag.StartsWith("month-unscheduled:", StringComparison.OrdinalIgnoreCase)) &&
+            chips.All(control => !ControlText(control).Contains("未排入", StringComparison.OrdinalIgnoreCase));
+        var unscheduledSummaryMatches = schedulesByDate.Values.All(schedule => schedule.Summary.UnscheduledCount == schedule.Unscheduled.Count);
+        var moreButtonOutsideCellCount = CountControlsOutsideTaggedDayCell(moreButtons);
+        var unscheduledPillOutsideCellCount = CountControlsOutsideTaggedDayCell(unscheduledPills);
         var minCellWidth = dayCellControls.Count == 0 ? 0 : dayCellControls.Min(control => control.Bounds.Width);
         var maxCellWidth = dayCellControls.Count == 0 ? 0 : dayCellControls.Max(control => control.Bounds.Width);
         var minCellHeight = dayCellControls.Count == 0 ? 0 : dayCellControls.Min(control => control.Bounds.Height);
@@ -1780,8 +1969,8 @@ public sealed class MainWindow : Window
         var compactMonth = ResolveScheduleCalendarViewportWidth() < 560;
         var expectedVisibleBlockLimit = compactMonth ? 1 : dayCells >= 42 ? 2 : 3;
 
-        return
-        [
+        var rows = new List<string>
+        {
             $"month_grid_present: {monthGrid is not null}",
             $"month_weekday_header_count: {weekdayHeaders.Count}",
             $"calendar_first_day_of_week: Monday",
@@ -1817,8 +2006,30 @@ public sealed class MainWindow : Window
             $"month_expected_visible_block_limit: {expectedVisibleBlockLimit}",
             $"month_event_chip_count: {chips.Count}",
             $"month_more_button_count: {moreButtons.Count}",
+            $"month_more_button_outside_cell_count: {moreButtonOutsideCellCount}",
+            $"month_more_button_bounds_pass: {moreButtonOutsideCellCount == 0}",
             $"month_min_chip_height: {(chips.Count == 0 ? 0 : chips.Min(control => control.Bounds.Height)):0.##}"
-        ];
+        };
+        rows.Add($"month_unscheduled_total_count: {unscheduledTotalCount}");
+        rows.Add($"month_unscheduled_day_count: {expectedUnscheduledDates.Count}");
+        rows.Add($"month_unscheduled_dates: {string.Join(" | ", expectedUnscheduledDates.Select(date => date.ToString("yyyy-MM-dd")))}");
+        rows.Add($"month_unscheduled_pill_count: {unscheduledPills.Count}");
+        rows.Add($"month_unscheduled_pill_dates: {string.Join(" | ", unscheduledPillDates.Select(date => date.ToString("yyyy-MM-dd")))}");
+        rows.Add($"month_unscheduled_pill_texts: {string.Join(" | ", unscheduledPillTexts)}");
+        rows.Add($"month_unscheduled_pill_count_pass: {expectedUnscheduledDates.SequenceEqual(unscheduledPillDates)}");
+        rows.Add($"month_unscheduled_pill_text_pass: {unscheduledPillTextPass}");
+        rows.Add($"month_unscheduled_total_matches_schedule_pass: {unscheduledSummaryMatches}");
+        rows.Add($"month_unscheduled_pill_zero_sized_count: {unscheduledPillZeroSizedCount}");
+        rows.Add($"month_unscheduled_pill_outside_cell_count: {unscheduledPillOutsideCellCount}");
+        rows.Add($"month_unscheduled_pill_bounds_pass: {unscheduledPillOutsideCellCount == 0}");
+        rows.Add($"month_unscheduled_pill_min_height: {(unscheduledPills.Count == 0 ? 0 : unscheduledPills.Min(control => control.Bounds.Height)):0.##}");
+        rows.Add($"month_unscheduled_pill_max_height: {(unscheduledPills.Count == 0 ? 0 : unscheduledPills.Max(control => control.Bounds.Height)):0.##}");
+        rows.Add($"month_unscheduled_pill_height_pass: {unscheduledPills.All(control => Math.Abs(control.Bounds.Height - 20) <= 1)}");
+        rows.Add($"month_unscheduled_pill_overlap_count: {unscheduledPillOverlapCount}");
+        rows.Add($"month_unscheduled_pill_overlap_pass: {unscheduledPillOverlapCount == 0}");
+        rows.Add($"month_unscheduled_not_event_chip_pass: {unscheduledNotEventChipPass}");
+        rows.Add($"month_unscheduled_pill_visible_pass: {expectedUnscheduledDates.Count == 0 || unscheduledPills.Count > 0}");
+        return rows;
     }
 
     private IReadOnlyList<string> BuildChatAuditRows(IReadOnlyList<Control> visibleControls, IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
@@ -5791,14 +6002,28 @@ public sealed class MainWindow : Window
             .Where(IsVisibleBlock)
             .OrderBy(block => block.StartMin)
             .ToList();
-        foreach (var block in visibleBlocks.Take(visibleBlockLimit))
+        var hasUnscheduled = schedule.Unscheduled.Count > 0;
+        var eventSlotLimit = hasUnscheduled ? Math.Max(0, visibleBlockLimit - 1) : visibleBlockLimit;
+        if (visibleBlocks.Count > eventSlotLimit)
+        {
+            eventSlotLimit = Math.Max(0, eventSlotLimit - 1);
+        }
+
+        var visibleEventCount = Math.Min(visibleBlocks.Count, eventSlotLimit);
+
+        if (hasUnscheduled)
+        {
+            root.Children.Add(BuildMonthUnscheduledPill(date, schedule));
+        }
+
+        foreach (var block in visibleBlocks.Take(eventSlotLimit))
         {
             root.Children.Add(BuildMonthEventChip(date, block, monthGrid));
         }
 
-        if (visibleBlocks.Count > visibleBlockLimit)
+        if (visibleBlocks.Count > visibleEventCount)
         {
-            root.Children.Add(BuildMonthMoreButton(date, schedule, visibleBlocks.Count - visibleBlockLimit));
+            root.Children.Add(BuildMonthMoreButton(date, schedule, visibleBlocks.Count - visibleEventCount));
         }
 
         var cell = new Border
@@ -5811,7 +6036,8 @@ public sealed class MainWindow : Window
             ClipToBounds = true,
             Child = root
         };
-        ToolTip.SetTip(cell, $"{date:yyyy-MM-dd} 周{WeekdayText(date)} · {visibleBlocks.Count} 个日程");
+        var unscheduledTip = schedule.Unscheduled.Count > 0 ? $" · 未排入 {schedule.Unscheduled.Count} 个任务" : "";
+        ToolTip.SetTip(cell, $"{date:yyyy-MM-dd} 周{WeekdayText(date)} · {visibleBlocks.Count} 个日程{unscheduledTip}");
         cell.PointerPressed += (_, args) =>
         {
             if (!args.GetCurrentPoint(cell).Properties.IsLeftButtonPressed) return;
@@ -5837,6 +6063,32 @@ public sealed class MainWindow : Window
         cell.ContextMenu = menu;
 
         return cell;
+    }
+
+    private Control BuildMonthUnscheduledPill(DateOnly date, DaySchedule schedule)
+    {
+        var count = schedule.Unscheduled.Count;
+        var pill = new Border
+        {
+            Tag = $"month-unscheduled:{date:yyyy-MM-dd}",
+            Background = Brush("#fef3c7"),
+            BorderBrush = Brush("#f59e0b"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(5, 1),
+            Height = 20,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Child = MonthSingleLineText($"未排入 {count}", 11, "#92400e", FontWeight.SemiBold)
+        };
+        var titles = string.Join("、", schedule.Unscheduled.Take(3).Select(task => task.Title));
+        ToolTip.SetTip(pill, $"{date:yyyy-MM-dd} 自动排程未排入 {count} 个任务：{titles}{(count > 3 ? "…" : "")}");
+        pill.PointerPressed += (_, args) =>
+        {
+            if (!args.GetCurrentPoint(pill).Properties.IsLeftButtonPressed) return;
+            args.Handled = true;
+            OpenDayFromMonth(date);
+        };
+        return pill;
     }
 
     private Control BuildMonthMoreButton(DateOnly date, DaySchedule schedule, int hiddenCount)
@@ -5873,9 +6125,10 @@ public sealed class MainWindow : Window
             .OrderBy(block => block.StartMin)
             .ToList();
         var menu = new ContextMenu();
+        var unscheduledTip = schedule.Unscheduled.Count > 0 ? $" · 未排入 {schedule.Unscheduled.Count}" : "";
         menu.Items.Add(new MenuItem
         {
-            Header = $"{date:yyyy 年 M 月 d 日} 周{WeekdayText(date)} · {blocks.Count} 个日程",
+            Header = $"{date:yyyy 年 M 月 d 日} 周{WeekdayText(date)} · {blocks.Count} 个日程{unscheduledTip}",
             IsEnabled = false
         });
         menu.Items.Add(new Separator());
@@ -5901,6 +6154,24 @@ public sealed class MainWindow : Window
             };
             overflow.Click += (_, _) => OpenDayFromMonth(date);
             menu.Items.Add(overflow);
+        }
+
+        if (schedule.Unscheduled.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(new MenuItem
+            {
+                Header = $"自动排程未排入 {schedule.Unscheduled.Count} 个任务",
+                IsEnabled = false
+            });
+            foreach (var task in schedule.Unscheduled.Take(6))
+            {
+                menu.Items.Add(new MenuItem
+                {
+                    Header = task.Title,
+                    IsEnabled = false
+                });
+            }
         }
 
         menu.Items.Add(new Separator());
