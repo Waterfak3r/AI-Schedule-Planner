@@ -1215,6 +1215,11 @@ public sealed class MainWindow : Window
 
         var fixedPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "rules-fixed-panel"));
         var taskPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "rules-task-panel"));
+        var weekdayBoxes = visibleControls
+            .OfType<CheckBox>()
+            .Where(control => (control.Name ?? "").StartsWith("weekday-picker-", StringComparison.Ordinal))
+            .ToList();
+        var weekdayLabelCount = weekdayBoxes.Count(box => ControlText(box.Content).StartsWith("周", StringComparison.Ordinal));
         var fixedPoint = fixedPanel?.TranslatePoint(new Point(0, 0), this);
         var taskPoint = taskPanel?.TranslatePoint(new Point(0, 0), this);
         var stacked = fixedPoint is not null &&
@@ -1226,7 +1231,10 @@ public sealed class MainWindow : Window
             $"rules_fixed_panel_width: {(fixedPanel?.Bounds.Width ?? 0):0.##}",
             $"rules_task_panel_width: {(taskPanel?.Bounds.Width ?? 0):0.##}",
             $"rules_panels_stacked: {stacked}",
-            $"rules_task_panel_min_width_pass: {(taskPanel?.Bounds.Width ?? 0) >= 420}"
+            $"rules_task_panel_min_width_pass: {(taskPanel?.Bounds.Width ?? 0) >= 420}",
+            $"rules_weekday_checkbox_count: {weekdayBoxes.Count}",
+            $"rules_weekday_label_count: {weekdayLabelCount}",
+            $"rules_weekday_labels_pass: {weekdayBoxes.Count >= 7 && weekdayLabelCount == weekdayBoxes.Count}"
         ];
     }
 
@@ -7440,10 +7448,19 @@ public sealed class MainWindow : Window
             {
                 Content = $"周{"日一二三四五六"[day]}",
                 IsChecked = selected.Contains(day),
+                Name = $"weekday-picker-{day}",
                 Tag = day,
                 Margin = new Thickness(0, 0, 10, 6),
-                MinHeight = 28
+                MinHeight = 30,
+                MinWidth = 58,
+                Padding = new Thickness(8, 4),
+                Foreground = Brush("#334155"),
+                Background = Brush("#ffffff"),
+                BorderBrush = Brush("#cbd5e1"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(7)
             };
+            ToolTip.SetTip(box, $"适用于周{"日一二三四五六"[day]}");
             boxes.Add(box);
             row.Children.Add(box);
         }
