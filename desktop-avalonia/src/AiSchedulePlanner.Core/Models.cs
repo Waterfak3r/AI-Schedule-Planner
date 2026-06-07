@@ -169,7 +169,9 @@ public sealed class PlannerState
     public List<FixedEventRule> FixedEvents { get; set; } = [];
     public List<TaskRule> Tasks { get; set; } = [];
     public Dictionary<string, bool> Completed { get; set; } = [];
+    public int RuleVersion { get; set; }
     public Dictionary<string, DaySchedule> DayOverrides { get; set; } = [];
+    public Dictionary<string, int> DayOverrideRuleVersions { get; set; } = [];
     public List<CommunityPost> CommunityPosts { get; set; } = [];
 }
 
@@ -191,7 +193,9 @@ public static class ModelCloning
             FixedEvents = state.FixedEvents.Select(item => item.Clone()).ToList(),
             Tasks = state.Tasks.Select(task => task.Clone()).ToList(),
             Completed = new Dictionary<string, bool>(state.Completed),
+            RuleVersion = state.RuleVersion,
             DayOverrides = state.DayOverrides.ToDictionary(item => item.Key, item => item.Value.Clone()),
+            DayOverrideRuleVersions = new Dictionary<string, int>(state.DayOverrideRuleVersions),
             CommunityPosts = state.CommunityPosts.Select(item => item.Clone()).ToList()
         };
     }

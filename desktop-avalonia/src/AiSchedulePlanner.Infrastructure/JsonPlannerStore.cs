@@ -138,7 +138,9 @@ public sealed class JsonPlannerStore : IPlannerStore
         state.Tasks ??= [];
         state.Completed ??= [];
         state.DayOverrides ??= [];
+        state.DayOverrideRuleVersions ??= [];
         state.CommunityPosts ??= [];
+        state.RuleVersion = Math.Max(0, state.RuleVersion);
 
         foreach (var fixedEvent in state.FixedEvents)
         {
@@ -153,6 +155,11 @@ public sealed class JsonPlannerStore : IPlannerStore
             task.DaysOfWeek ??= [];
             task.DurationMin = Math.Clamp(task.DurationMin <= 0 ? 30 : task.DurationMin, 5, 480);
             task.Priority = Math.Clamp(task.Priority <= 0 ? 3 : task.Priority, 1, 5);
+        }
+
+        foreach (var key in state.DayOverrideRuleVersions.Keys.Except(state.DayOverrides.Keys).ToList())
+        {
+            state.DayOverrideRuleVersions.Remove(key);
         }
 
         return state;

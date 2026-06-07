@@ -21,6 +21,7 @@ public sealed class JsonPlannerStoreTests
             state.Preferences.SchedulePanelCollapsed = true;
             state.Tasks.Add(new TaskRule { Id = "task_extra", Title = "额外任务", DurationMin = 25, DaysOfWeek = [1] });
             state.Completed["manual_bar"] = true;
+            state.RuleVersion = 7;
             state.DayOverrides["2026-06-07"] = new DaySchedule
             {
                 Date = new DateOnly(2026, 6, 7),
@@ -36,6 +37,7 @@ public sealed class JsonPlannerStoreTests
                     }
                 ]
             };
+            state.DayOverrideRuleVersions["2026-06-07"] = 6;
             await store.SaveStateAsync(state);
 
             await store.SaveAiSettingsAsync(new AiSettings
@@ -56,8 +58,10 @@ public sealed class JsonPlannerStoreTests
             Assert.True(loadedState.Preferences.SchedulePanelCollapsed);
             Assert.Contains(loadedState.Tasks, task => task.Id == "task_extra");
             Assert.True(loadedState.Completed["manual_bar"]);
+            Assert.Equal(7, loadedState.RuleVersion);
             Assert.True(loadedState.DayOverrides.ContainsKey("2026-06-07"));
             Assert.Equal("居酒屋", loadedState.DayOverrides["2026-06-07"].Blocks.Single().Title);
+            Assert.Equal(6, loadedState.DayOverrideRuleVersions["2026-06-07"]);
             Assert.Equal("https://example.test/v1", loadedSettings.BaseUrl);
             Assert.Equal("test-key", loadedSettings.ApiKey);
             Assert.True(File.Exists(Path.Combine(dir, "planner-state.v1.json")));
@@ -100,6 +104,9 @@ public sealed class JsonPlannerStoreTests
                   ],
                   "completed": null,
                   "dayOverrides": null,
+                  "dayOverrideRuleVersions": {
+                    "2026-06-07": 99
+                  },
                   "communityPosts": null
                 }
                 """);
@@ -113,6 +120,9 @@ public sealed class JsonPlannerStoreTests
             Assert.False(state.Preferences.SchedulePanelCollapsed);
             Assert.NotNull(state.Completed);
             Assert.NotNull(state.DayOverrides);
+            Assert.Equal(0, state.RuleVersion);
+            Assert.NotNull(state.DayOverrideRuleVersions);
+            Assert.Empty(state.DayOverrideRuleVersions);
             Assert.NotNull(state.CommunityPosts);
             var fixedEvent = Assert.Single(state.FixedEvents);
             Assert.StartsWith("fixed_", fixedEvent.Id);

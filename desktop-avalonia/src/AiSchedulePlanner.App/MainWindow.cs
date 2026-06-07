@@ -133,6 +133,7 @@ public sealed class MainWindow : Window
     private IBrush? _monthDropTargetBorderBrush;
     private Thickness _monthDropTargetBorderThickness;
     private Dictionary<DateOnly, DaySchedule> _undoSchedules = [];
+    private Dictionary<DateOnly, int?> _undoDayOverrideRuleVersions = [];
     private Dictionary<string, bool>? _undoCompletedSnapshot;
     private string _undoDescription = "";
     private Task? _loadTask;
@@ -532,6 +533,9 @@ public sealed class MainWindow : Window
             case "schedule-month":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Month, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
                 break;
+            case "schedule-stale-override":
+                ApplyScheduleStaleOverrideReviewScenario();
+                break;
             case "schedule-collapsed":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Week, panelCollapsed: true, sidebarCollapsed: true, selectBlock: false, markComplete: false);
                 break;
@@ -685,7 +689,7 @@ public sealed class MainWindow : Window
             ]
         };
         schedule.Summary = BuildSummaryForReview(schedule);
-        _state.DayOverrides[DateKey(_focusDate)] = schedule;
+        StoreDayOverride(schedule);
         _state.Completed["overview-progress-1"] = true;
         _state.Completed["overview-progress-2"] = true;
         _state.Completed["overview-progress-fixed"] = true;
@@ -765,6 +769,44 @@ public sealed class MainWindow : Window
         RenderActivePage();
     }
 
+    private void ApplyScheduleStaleOverrideReviewScenario()
+    {
+        _activePage = "Schedule";
+        _scheduleView = ScheduleViewMode.Day;
+        _state.Preferences.SchedulePanelCollapsed = false;
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+        _focusDate = new DateOnly(2026, 6, 7);
+        _state.RuleVersion = 2;
+
+        var schedule = new DaySchedule
+        {
+            Date = _focusDate,
+            Blocks =
+            [
+                new ScheduleBlock
+                {
+                    RuntimeId = "stale-override-study",
+                    Type = ScheduleBlockType.Task,
+                    Title = "旧版复习安排",
+                    Category = "study",
+                    StartMin = 8 * 60,
+                    EndMin = 9 * 60,
+                    Editable = true
+                }
+            ]
+        };
+        schedule.Summary = BuildSummaryForReview(schedule);
+        var key = DateKey(_focusDate);
+        _state.DayOverrides[key] = schedule.Clone();
+        _state.DayOverrideRuleVersions[key] = 1;
+        RebuildSchedules();
+        RenderActivePage();
+    }
+
     private void ApplyTodayScheduleReviewScenario(ScheduleViewMode viewMode)
     {
         _focusDate = DateOnly.FromDateTime(DateTime.Today);
@@ -817,7 +859,7 @@ public sealed class MainWindow : Window
             UnscheduledCount = reviewSchedule.Unscheduled.Count,
             IssueCount = reviewSchedule.Issues.Count
         };
-        _state.DayOverrides[DateKey(_focusDate)] = reviewSchedule.Clone();
+        StoreDayOverride(reviewSchedule);
         RebuildSchedules();
 
         _chatMessages.Clear();
@@ -890,7 +932,7 @@ public sealed class MainWindow : Window
         }
 
         schedule.Blocks = [.. schedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
-        _state.DayOverrides[DateKey(_focusDate)] = schedule;
+        StoreDayOverride(schedule);
     }
 
     private string BuildUiAuditReport(int width, int height, string scenario)
@@ -1204,7 +1246,10 @@ public sealed class MainWindow : Window
             topHeight = top.Bounds.Height;
         }
 
-        var hasTransientTopStrip = _selectedRuntimeIds.Count > 0 || GetScheduleIssuesForDisplay().Count > 0;
+        var issuesForDisplay = GetScheduleIssuesForDisplay();
+        var staleOverrideIssueCount = issuesForDisplay.Count(issue => issue.Code == "manual_override_stale_rules");
+        var staleOverrideIssueVisible = visibleTexts.Any(text => text.Contains("固定事项或任务规则已更新", StringComparison.Ordinal));
+        var hasTransientTopStrip = _selectedRuntimeIds.Count > 0 || issuesForDisplay.Count > 0;
         var compactLimit = hasTransientTopStrip ? 132d : 54d;
         var summaryChipsInScheduleMain = main is null
             ? new List<string>()
@@ -1244,6 +1289,11 @@ public sealed class MainWindow : Window
             $"schedule_summary_chips_in_main: {string.Join(" | ", summaryChipsInScheduleMain)}",
             $"schedule_exact_save_button_visible: {buttonLabels.Contains("保存")}",
             $"schedule_reminder_button_visible: {hasReminderButton}",
+            $"schedule_day_override_stale: {IsDayOverrideStale(_focusDate)}",
+            $"schedule_stale_override_issue_count: {staleOverrideIssueCount}",
+            $"schedule_stale_override_issue_visible: {staleOverrideIssueVisible}",
+            $"schedule_rule_version: {_state.RuleVersion}",
+            $"schedule_day_override_rule_version: {(_state.DayOverrideRuleVersions.TryGetValue(DateKey(_focusDate), out var overrideVersion) ? overrideVersion.ToString() : "")}",
             $"schedule_left_panel_explanatory_text_visible: {explanatoryTexts.Count > 0}",
             $"schedule_left_panel_explanatory_texts: {string.Join(" | ", explanatoryTexts)}"
         ];
@@ -1597,9 +1647,20 @@ public sealed class MainWindow : Window
 
     private DaySchedule ApplyDayOverride(DaySchedule schedule)
     {
-        return _state.DayOverrides.TryGetValue(DateKey(schedule.Date), out var overrideSchedule)
-            ? overrideSchedule.Clone()
-            : schedule;
+        var key = DateKey(schedule.Date);
+        if (!_state.DayOverrides.TryGetValue(key, out var overrideSchedule))
+        {
+            return schedule;
+        }
+
+        var nextSchedule = overrideSchedule.Clone();
+        if (IsDayOverrideStale(key))
+        {
+            nextSchedule.Issues.Add(BuildStaleDayOverrideIssue());
+            nextSchedule.Summary.IssueCount = nextSchedule.Issues.Count;
+        }
+
+        return nextSchedule;
     }
 
     private WeekPlan ApplyWeekOverrides(WeekPlan plan)
@@ -1614,7 +1675,7 @@ public sealed class MainWindow : Window
 
     private void SaveCurrentDayOverride(string reason)
     {
-        _state.DayOverrides[DateKey(_daySchedule.Date)] = _daySchedule.Clone();
+        StoreDayOverride(_daySchedule);
         SyncDayIntoWeekPlan(_daySchedule);
         var issues = ComputeManualScheduleIssues(_daySchedule);
         var suffix = issues.Count > 0 ? $"；发现 {issues.Count} 个时间问题" : "";
@@ -1666,11 +1727,63 @@ public sealed class MainWindow : Window
         }
     }
 
+    private void StoreDayOverride(DaySchedule schedule)
+    {
+        var key = DateKey(schedule.Date);
+        _state.DayOverrides[key] = CloneForDayOverrideStorage(schedule);
+        _state.DayOverrideRuleVersions[key] = Math.Max(0, _state.RuleVersion);
+    }
+
+    private static DaySchedule CloneForDayOverrideStorage(DaySchedule schedule)
+    {
+        var clone = schedule.Clone();
+        clone.Issues.RemoveAll(issue => issue.Code == "manual_override_stale_rules");
+        clone.Summary.IssueCount = clone.Issues.Count;
+        return clone;
+    }
+
+    private void RemoveDayOverride(DateOnly date)
+    {
+        var key = DateKey(date);
+        _state.DayOverrides.Remove(key);
+        _state.DayOverrideRuleVersions.Remove(key);
+    }
+
+    private void MarkRulesChanged()
+    {
+        _state.RuleVersion = Math.Max(0, _state.RuleVersion) + 1;
+    }
+
+    private bool IsDayOverrideStale(DateOnly date) => IsDayOverrideStale(DateKey(date));
+
+    private bool IsDayOverrideStale(string key)
+    {
+        var currentVersion = Math.Max(0, _state.RuleVersion);
+        if (currentVersion <= 0 || !_state.DayOverrides.ContainsKey(key))
+        {
+            return false;
+        }
+
+        return !_state.DayOverrideRuleVersions.TryGetValue(key, out var overrideVersion) ||
+               overrideVersion < currentVersion;
+    }
+
+    private static ScheduleIssue BuildStaleDayOverrideIssue()
+    {
+        return new ScheduleIssue
+        {
+            Level = ScheduleIssueLevel.Warning,
+            Code = "manual_override_stale_rules",
+            Message = "这一天有手动调整，且固定事项或任务规则已更新；恢复当天可按最新规则重建。"
+        };
+    }
+
     private void ClearCurrentDayOverride()
     {
-        if (_state.DayOverrides.Remove(DateKey(_focusDate)))
+        if (_state.DayOverrides.ContainsKey(DateKey(_focusDate)))
         {
             CaptureUndo("恢复当天");
+            RemoveDayOverride(_focusDate);
             RebuildSchedules();
             SetStatus("已恢复当天自动生成日程，正在自动保存");
             QueueStateAutosave("已恢复当天自动生成日程，并已自动保存");
@@ -1687,9 +1800,15 @@ public sealed class MainWindow : Window
 
     private void CaptureUndo(string description, IEnumerable<DateOnly> dates)
     {
-        _undoSchedules = dates
-            .Distinct()
-            .ToDictionary(date => date, date => BuildScheduleForDate(date).Clone());
+        var distinctDates = dates.Distinct().ToList();
+        _undoSchedules = distinctDates
+            .ToDictionary(date => date, date => CloneForDayOverrideStorage(BuildScheduleForDate(date)));
+        _undoDayOverrideRuleVersions = distinctDates
+            .ToDictionary(
+                date => date,
+                date => _state.DayOverrideRuleVersions.TryGetValue(DateKey(date), out var version)
+                    ? (int?)version
+                    : null);
         _undoCompletedSnapshot = new Dictionary<string, bool>(_state.Completed);
         _undoDescription = description;
     }
@@ -1697,6 +1816,7 @@ public sealed class MainWindow : Window
     private void ClearUndo()
     {
         _undoSchedules = [];
+        _undoDayOverrideRuleVersions = [];
         _undoCompletedSnapshot = null;
         _undoDescription = "";
     }
@@ -1708,7 +1828,12 @@ public sealed class MainWindow : Window
         var restoredDates = _undoSchedules.Keys.OrderBy(date => date).ToList();
         foreach (var (date, schedule) in _undoSchedules)
         {
-            _state.DayOverrides[DateKey(date)] = schedule.Clone();
+            var key = DateKey(date);
+            _state.DayOverrides[key] = CloneForDayOverrideStorage(schedule);
+            _state.DayOverrideRuleVersions[key] =
+                _undoDayOverrideRuleVersions.TryGetValue(date, out var version) && version.HasValue
+                    ? version.Value
+                    : Math.Max(0, _state.RuleVersion);
         }
 
         if (_undoCompletedSnapshot is not null)
@@ -2846,7 +2971,7 @@ public sealed class MainWindow : Window
                 .SelectMany(item => new[] { item.RemovedBlock, item.UpdatedBlock })
                 .Where(block => block is not null)
                 .Select(block => block!));
-            _state.DayOverrides[DateKey(group.Date)] = nextSchedule.Clone();
+            StoreDayOverride(nextSchedule);
             SyncDayIntoWeekPlan(nextSchedule);
             issues.AddRange(ComputeManualScheduleIssues(nextSchedule));
         }
@@ -3194,6 +3319,10 @@ public sealed class MainWindow : Window
         if (_selectedRuntimeIds.Count > 0 && panelCollapsed)
         {
             statusStack.Children.Add(RenderSelectedActionBar());
+        }
+        if (issues.Count > 0 && panelCollapsed)
+        {
+            statusStack.Children.Add(RenderScheduleIssues(issues));
         }
 
         if (statusStack.Children.Count > 0)
@@ -6411,8 +6540,8 @@ public sealed class MainWindow : Window
 
         RemoveCompletedForBlocks([sourceBlock]);
 
-        _state.DayOverrides[DateKey(sourceDate)] = sourceSchedule.Clone();
-        _state.DayOverrides[DateKey(targetDate)] = targetSchedule.Clone();
+        StoreDayOverride(sourceSchedule);
+        StoreDayOverride(targetSchedule);
         _focusDate = targetDate;
         RebuildSchedules();
 
@@ -6700,6 +6829,7 @@ public sealed class MainWindow : Window
                     () =>
                     {
                         _state.FixedEvents.Remove(item);
+                        MarkRulesChanged();
                         RebuildSchedules();
                         SetStatus($"已删除固定事项：{item.Title}，正在自动保存");
                         QueueStateAutosave($"已删除固定事项：{item.Title}");
@@ -6780,6 +6910,7 @@ public sealed class MainWindow : Window
                     () =>
                     {
                         _state.Tasks.Remove(item);
+                        MarkRulesChanged();
                         RebuildSchedules();
                         SetStatus($"已删除任务规则：{item.Title}，正在自动保存");
                         QueueStateAutosave($"已删除任务规则：{item.Title}");
@@ -6916,11 +7047,24 @@ public sealed class MainWindow : Window
                 return;
             }
 
+            var nextStart = TimeText.ToTime(startMin.Value);
+            var nextEnd = TimeText.ToTime(endMin.Value);
+            var nextBuffer = int.TryParse(buffer.Text, out var bufferMin) ? Math.Clamp(bufferMin, 0, 180) : 0;
+            var changed = item.Title != nextTitle ||
+                          item.Start != nextStart ||
+                          item.End != nextEnd ||
+                          item.BufferMin != nextBuffer ||
+                          !item.DaysOfWeek.SequenceEqual(days);
+
             item.Title = nextTitle;
-            item.Start = TimeText.ToTime(startMin.Value);
-            item.End = TimeText.ToTime(endMin.Value);
-            item.BufferMin = int.TryParse(buffer.Text, out var bufferMin) ? Math.Clamp(bufferMin, 0, 180) : 0;
+            item.Start = nextStart;
+            item.End = nextEnd;
+            item.BufferMin = nextBuffer;
             item.DaysOfWeek = days;
+            if (changed)
+            {
+                MarkRulesChanged();
+            }
             RebuildSchedules();
             SetStatus($"已编辑固定事项：{item.Title}，正在自动保存");
             QueueStateAutosave($"固定事项已自动保存：{item.Title}");
@@ -7031,12 +7175,27 @@ public sealed class MainWindow : Window
                 return;
             }
 
+            var nextDuration = Math.Clamp(durationMin, 5, 480);
+            var nextPriority = Math.Clamp(priorityValue, 1, 5);
+            var nextTarget = int.TryParse(target.Text, out var targetValue) ? Math.Clamp(targetValue, 0, 7) : 0;
+            var nextCategory = category.SelectedItem is CategoryOption option ? option.Value : "other";
+            var changed = item.Title != nextTitle ||
+                          item.DurationMin != nextDuration ||
+                          item.Priority != nextPriority ||
+                          item.WeeklyTargetCount != nextTarget ||
+                          item.Category != nextCategory ||
+                          !item.DaysOfWeek.SequenceEqual(days);
+
             item.Title = nextTitle;
-            item.DurationMin = Math.Clamp(durationMin, 5, 480);
-            item.Priority = Math.Clamp(priorityValue, 1, 5);
-            item.WeeklyTargetCount = int.TryParse(target.Text, out var targetValue) ? Math.Clamp(targetValue, 0, 7) : 0;
-            item.Category = category.SelectedItem is CategoryOption option ? option.Value : "other";
+            item.DurationMin = nextDuration;
+            item.Priority = nextPriority;
+            item.WeeklyTargetCount = nextTarget;
+            item.Category = nextCategory;
             item.DaysOfWeek = days;
+            if (changed)
+            {
+                MarkRulesChanged();
+            }
             RebuildSchedules();
             SetStatus($"已编辑任务规则：{item.Title}，正在自动保存");
             QueueStateAutosave($"任务规则已自动保存：{item.Title}");
@@ -7236,6 +7395,7 @@ public sealed class MainWindow : Window
             BufferMin = int.TryParse(buffer, out var bufferMin) ? Math.Clamp(bufferMin, 0, 180) : 0,
             DaysOfWeek = days
         });
+        MarkRulesChanged();
         SetStatus("已新增固定事项，正在自动保存");
         return true;
     }
@@ -7284,6 +7444,7 @@ public sealed class MainWindow : Window
             WeeklyTargetCount = targetValue,
             DaysOfWeek = days
         });
+        MarkRulesChanged();
         SetStatus("已新增任务规则，正在自动保存");
         return true;
     }
@@ -7852,10 +8013,17 @@ public sealed class MainWindow : Window
                 return;
             }
 
-            _state.Preferences.WakeTime = TimeText.ToTime(wakeMin.Value);
-            _state.Preferences.Bedtime = TimeText.ToTime(bedMin.Value);
+            var nextWake = TimeText.ToTime(wakeMin.Value);
+            var nextBed = TimeText.ToTime(bedMin.Value);
+            var scheduleBoundsChanged = _state.Preferences.WakeTime != nextWake || _state.Preferences.Bedtime != nextBed;
+            _state.Preferences.WakeTime = nextWake;
+            _state.Preferences.Bedtime = nextBed;
             _state.Preferences.StartupPage = startup.SelectedItem is PageOption option ? option.Value : "Chat";
-            _state.DayOverrides.Remove(DateKey(_focusDate));
+            if (scheduleBoundsChanged)
+            {
+                MarkRulesChanged();
+            }
+            RemoveDayOverride(_focusDate);
             RebuildSchedules();
             await _store.SaveStateAsync(_state);
             SetStatus("偏好已保存，并已重建当前日程");
@@ -7928,6 +8096,7 @@ public sealed class MainWindow : Window
             }
 
             _state.DayOverrides.Clear();
+            _state.DayOverrideRuleVersions.Clear();
             RebuildSchedules();
             await _store.SaveStateAsync(_state);
             SetStatus("已清除所有手动调整");
