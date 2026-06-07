@@ -833,6 +833,9 @@ public sealed class MainWindow : Window
         var hasExactSaveButton = buttonLabels.Contains("保存");
         var hasScheduleReminderButton = _activePage == "Schedule" &&
             buttonLabels.Any(label => label is "提醒" or "复制提醒" or "复制今日提醒");
+        var hasCalendarToggle = buttonLabels.Contains("收起日历") ||
+            buttonLabels.Contains("展开日历") ||
+            visibleControls.Any(control => Equals(control.Tag, "schedule-calendar-toggle"));
         var report = new StringBuilder();
 
         report.AppendLine("AI 日程助手 internal UI audit");
@@ -860,7 +863,7 @@ public sealed class MainWindow : Window
         report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
         report.AppendLine($"has_exact_save_button: {hasExactSaveButton}");
         report.AppendLine($"has_schedule_reminder_button: {hasScheduleReminderButton}");
-        report.AppendLine($"has_calendar_toggle: {buttonLabels.Contains("收起日历") || buttonLabels.Contains("展开日历")}");
+        report.AppendLine($"has_calendar_toggle: {hasCalendarToggle}");
         report.AppendLine($"has_legacy_schedule_text: {legacyScheduleTexts.Count > 0}");
         report.AppendLine($"legacy_schedule_texts: {string.Join(" | ", legacyScheduleTexts)}");
         report.AppendLine($"has_schedule_tutorial_text: {tutorialScheduleTexts.Count > 0}");
@@ -2737,6 +2740,7 @@ public sealed class MainWindow : Window
     private Control RenderSchedule()
     {
         var panelCollapsed = _state.Preferences.SchedulePanelCollapsed;
+        var issues = GetScheduleIssuesForDisplay();
         var root = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions(panelCollapsed ? "0,*" : "240,*"),
@@ -2747,9 +2751,15 @@ public sealed class MainWindow : Window
         {
             var leftRail = new StackPanel { Spacing = 12 };
             leftRail.Children.Add(RenderMiniMonthCard());
-            leftRail.Children.Add(RenderNowCard());
-            leftRail.Children.Add(RenderFocusDayAgendaCard());
-            leftRail.Children.Add(RenderSelectionInspector());
+            if (issues.Count > 0)
+            {
+                leftRail.Children.Add(RenderScheduleIssues(issues));
+            }
+
+            if (_selectedRuntimeIds.Count > 0)
+            {
+                leftRail.Children.Add(RenderSelectionInspector());
+            }
             var leftScroller = new ScrollViewer
             {
                 Content = leftRail,
@@ -2783,12 +2793,6 @@ public sealed class MainWindow : Window
         if (_selectedRuntimeIds.Count > 0 && panelCollapsed)
         {
             statusStack.Children.Add(RenderSelectedActionBar());
-        }
-
-        var issues = GetScheduleIssuesForDisplay();
-        if (issues.Count > 0)
-        {
-            statusStack.Children.Add(RenderScheduleIssues(issues));
         }
 
         if (statusStack.Children.Count > 0)
@@ -2960,6 +2964,11 @@ public sealed class MainWindow : Window
         var viewportWidth = ResolveScheduleCalendarViewportWidth();
         var singleLine = viewportWidth >= 600;
 
+        if (!singleLine)
+        {
+            return RenderCompactScheduleToolbar();
+        }
+
         var nav = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
@@ -2973,7 +2982,9 @@ public sealed class MainWindow : Window
         }
 
         AddNav(ToolbarButton("今天", (_, _) => GoToToday(), secondary: true));
-        AddNav(ToolbarButton(_state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历", (_, _) => ToggleSchedulePanel(), secondary: true));
+        var calendarToggle = ToolbarButton(_state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历", (_, _) => ToggleSchedulePanel(), secondary: true);
+        calendarToggle.Tag = "schedule-calendar-toggle";
+        AddNav(calendarToggle);
         AddNav(BuildScheduleNavGroup(), 0);
 
         var titleStack = new StackPanel
@@ -3028,6 +3039,66 @@ public sealed class MainWindow : Window
         };
     }
 
+    private Control RenderCompactScheduleToolbar()
+    {
+        var nav = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        nav.Children.Add(CompactToolbarButton("今天", (_, _) => GoToToday(), "今天"));
+        var calendarToggle = CompactToolbarButton("☰", (_, _) => ToggleSchedulePanel(), _state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历");
+        calendarToggle.Tag = "schedule-calendar-toggle";
+        nav.Children.Add(calendarToggle);
+        nav.Children.Add(BuildScheduleNavGroup(compact: true));
+
+        var title = MonthSingleLineText(SchedulePeriodTitle(), 15, "#202124", FontWeight.SemiBold);
+        title.VerticalAlignment = VerticalAlignment.Center;
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+            Spacing = 6
+        };
+        actions.Children.Add(BuildScheduleViewSwitcher(compact: true));
+        actions.Children.Add(CompactToolbarButton("+", async (_, _) =>
+        {
+            await CreateScheduleBlockInDayViewAsync(ResolveDefaultNewBlockStartMin());
+        }, "新建日程"));
+        if (_undoSchedules.Count > 0)
+        {
+            actions.Children.Add(CompactToolbarButton("↶", (_, _) => UndoLastScheduleChange(), "撤销"));
+        }
+
+        if (HasCurrentDayOverride())
+        {
+            actions.Children.Add(CompactToolbarButton("↺", (_, _) => ClearCurrentDayOverride(), "恢复当天"));
+        }
+
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,8,*,8,Auto"),
+            MinHeight = 34
+        };
+        Grid.SetColumn(nav, 0);
+        Grid.SetColumn(title, 2);
+        Grid.SetColumn(actions, 4);
+        grid.Children.Add(nav);
+        grid.Children.Add(title);
+        grid.Children.Add(actions);
+
+        return new Border
+        {
+            Background = Brush("#00ffffff"),
+            Padding = new Thickness(0),
+            Tag = "schedule-toolbar",
+            Child = grid
+        };
+    }
+
     private WrapPanel BuildScheduleToolbarActions(bool alignRight)
     {
         var actions = new WrapPanel
@@ -3043,7 +3114,7 @@ public sealed class MainWindow : Window
             actions.Children.Add(control);
         }
 
-        AddAction(BuildScheduleViewSwitcher(), 10);
+        AddAction(BuildScheduleViewSwitcher(compact: false), 10);
         AddAction(ToolbarButton("新建", async (_, _) =>
         {
             await CreateScheduleBlockInDayViewAsync(ResolveDefaultNewBlockStartMin());
@@ -3070,18 +3141,40 @@ public sealed class MainWindow : Window
         return button;
     }
 
-    private Control BuildScheduleNavGroup()
+    private Button CompactToolbarButton(string text, EventHandler<RoutedEventArgs> onClick, string tip)
+    {
+        var button = new Button
+        {
+            Content = CenteredIconText(text, text.Length > 1 ? 12 : 14, "#3c4043"),
+            Width = text.Length > 1 ? 42 : 32,
+            Height = 32,
+            MinHeight = 32,
+            Padding = new Thickness(0),
+            Background = Brush("#ffffff"),
+            Foreground = Brush("#3c4043"),
+            BorderBrush = Brush("#dadce0"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(button, tip);
+        button.Click += onClick;
+        return button;
+    }
+
+    private Control BuildScheduleNavGroup(bool compact = false)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
-        row.Children.Add(FlatToolbarButton("←", (_, _) => ShiftSchedulePeriod(-1), $"上一{ScheduleViewLabel(_scheduleView)}"));
+        row.Children.Add(FlatToolbarButton("←", (_, _) => ShiftSchedulePeriod(-1), $"上一{ScheduleViewLabel(_scheduleView)}", compact));
         row.Children.Add(new Border
         {
             Width = 1,
-            Height = 22,
+            Height = compact ? 18 : 22,
             Background = Brush("#dadce0"),
             VerticalAlignment = VerticalAlignment.Center
         });
-        row.Children.Add(FlatToolbarButton("→", (_, _) => ShiftSchedulePeriod(1), $"下一{ScheduleViewLabel(_scheduleView)}"));
+        row.Children.Add(FlatToolbarButton("→", (_, _) => ShiftSchedulePeriod(1), $"下一{ScheduleViewLabel(_scheduleView)}", compact));
         return new Border
         {
             Background = Brush("#ffffff"),
@@ -3093,13 +3186,15 @@ public sealed class MainWindow : Window
         };
     }
 
-    private Button FlatToolbarButton(string text, EventHandler<RoutedEventArgs> onClick, string? tip = null)
+    private Button FlatToolbarButton(string text, EventHandler<RoutedEventArgs> onClick, string? tip = null, bool compact = false)
     {
         var button = new Button
         {
-            Content = CenteredIconText(text, 15, "#3c4043"),
-            MinHeight = 34,
-            Padding = new Thickness(13, 7),
+            Content = CenteredIconText(text, compact ? 13 : 15, "#3c4043"),
+            Width = compact ? 28 : double.NaN,
+            Height = compact ? 32 : double.NaN,
+            MinHeight = compact ? 32 : 34,
+            Padding = compact ? new Thickness(0) : new Thickness(13, 7),
             Background = Brush("#00ffffff"),
             Foreground = Brush("#3c4043"),
             BorderBrush = Brush("#00ffffff"),
@@ -3116,12 +3211,12 @@ public sealed class MainWindow : Window
         return button;
     }
 
-    private Control BuildScheduleViewSwitcher()
+    private Control BuildScheduleViewSwitcher(bool compact)
     {
         var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
-        row.Children.Add(ScheduleViewButton("月", ScheduleViewMode.Month));
-        row.Children.Add(ScheduleViewButton("周", ScheduleViewMode.Week));
-        row.Children.Add(ScheduleViewButton("日", ScheduleViewMode.Day));
+        row.Children.Add(ScheduleViewButton("月", ScheduleViewMode.Month, compact));
+        row.Children.Add(ScheduleViewButton("周", ScheduleViewMode.Week, compact));
+        row.Children.Add(ScheduleViewButton("日", ScheduleViewMode.Day, compact));
         return new Border
         {
             Background = Brush("#f8fafd"),
@@ -3133,15 +3228,17 @@ public sealed class MainWindow : Window
         };
     }
 
-    private Button ScheduleViewButton(string label, ScheduleViewMode mode)
+    private Button ScheduleViewButton(string label, ScheduleViewMode mode, bool compact)
     {
         var active = _scheduleView == mode;
         var button = Button(label, (_, _) =>
         {
             SwitchScheduleView(mode);
         }, secondary: !active);
-        button.MinHeight = 34;
-        button.Padding = new Thickness(14, 7);
+        button.Width = compact ? 30 : double.NaN;
+        button.Height = compact ? 32 : double.NaN;
+        button.MinHeight = compact ? 32 : 34;
+        button.Padding = compact ? new Thickness(0) : new Thickness(14, 7);
         button.Background = Brush(active ? "#e8f0fe" : "#00ffffff");
         button.Foreground = Brush(active ? "#1967d2" : "#3c4043");
         button.BorderBrush = Brush("#00ffffff");
