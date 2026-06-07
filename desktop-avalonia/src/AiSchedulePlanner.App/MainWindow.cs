@@ -2842,8 +2842,10 @@ public sealed class MainWindow : Window
             changedDates.Add(group.Date);
             var nextSchedule = result.NextSchedule.Clone();
             RemoveCompletedForBlocks(result.Results
-                .Where(item => item.Status == "applied" && item.RemovedBlock is not null)
-                .Select(item => item.RemovedBlock!));
+                .Where(item => item.Status == "applied")
+                .SelectMany(item => new[] { item.RemovedBlock, item.UpdatedBlock })
+                .Where(block => block is not null)
+                .Select(block => block!));
             _state.DayOverrides[DateKey(group.Date)] = nextSchedule.Clone();
             SyncDayIntoWeekPlan(nextSchedule);
             issues.AddRange(ComputeManualScheduleIssues(nextSchedule));
@@ -4936,13 +4938,14 @@ public sealed class MainWindow : Window
             }
 
             CaptureUndo(isNew ? "新建日程" : "编辑日程");
+            var nextCategory = category.SelectedItem is CategoryOption option ? option.Value : "other";
             var shouldClearCompleted = !isNew &&
                 IsBlockCompleted(block) &&
-                !string.Equals(block.Title, nextTitle, StringComparison.Ordinal);
+                HasScheduleBlockMeaningChanged(block, nextTitle, startMin.Value, endMin.Value, nextCategory);
             block.Title = nextTitle;
             block.StartMin = startMin.Value;
             block.EndMin = endMin.Value;
-            block.Category = category.SelectedItem is CategoryOption option ? option.Value : "other";
+            block.Category = nextCategory;
             if (shouldClearCompleted)
             {
                 _state.Completed.Remove(block.RuntimeId);
@@ -6368,6 +6371,7 @@ public sealed class MainWindow : Window
             }
 
             CaptureUndo("周视图拖动");
+            RemoveCompletedForBlocks([target]);
             target.StartMin = nextStart;
             target.EndMin = nextStart + duration;
             _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
@@ -6405,11 +6409,7 @@ public sealed class MainWindow : Window
         sourceSchedule.Blocks = [.. sourceSchedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
         targetSchedule.Blocks = [.. targetSchedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
 
-        if (IsBlockCompleted(sourceBlock))
-        {
-            _state.Completed.Remove(sourceBlock.RuntimeId);
-            _state.Completed[moved.RuntimeId] = true;
-        }
+        RemoveCompletedForBlocks([sourceBlock]);
 
         _state.DayOverrides[DateKey(sourceDate)] = sourceSchedule.Clone();
         _state.DayOverrides[DateKey(targetDate)] = targetSchedule.Clone();
@@ -8056,6 +8056,7 @@ public sealed class MainWindow : Window
         }
 
         CaptureUndo("批量调整");
+        RemoveCompletedForBlocks(selectedBlocks);
         MoveBlocksByDelta(selectedBlocks, clampedDelta);
         _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(block => block.StartMin)];
         var direction = clampedDelta < 0 ? "上移" : "下移";
@@ -8242,6 +8243,7 @@ public sealed class MainWindow : Window
         if (selectedBlocks.Count <= 1)
         {
             CaptureUndo("拖动日程");
+            RemoveCompletedForBlocks([_dragBlock]);
             _dragBlock.StartMin = nextStart;
             _dragBlock.EndMin = nextStart + duration;
         }
@@ -8256,6 +8258,7 @@ public sealed class MainWindow : Window
             }
 
             CaptureUndo("批量拖动");
+            RemoveCompletedForBlocks(selectedBlocks);
             MoveBlocksByDelta(selectedBlocks, deltaMinutes);
         }
         _dragBlock = null;
@@ -8297,6 +8300,7 @@ public sealed class MainWindow : Window
         }
 
         CaptureUndo("调整时长");
+        RemoveCompletedForBlocks([target]);
         target.EndMin = nextEnd;
         _daySchedule.Blocks = [.. _daySchedule.Blocks.OrderBy(block => block.StartMin).ThenBy(block => block.EndMin)];
         SaveCurrentDayOverride($"已调整 {target.Title} 到 {target.Start}-{target.End}");
@@ -8333,6 +8337,14 @@ public sealed class MainWindow : Window
     private bool IsBlockCompleted(ScheduleBlock block)
     {
         return IsCompletableBlock(block) && _state.Completed.TryGetValue(block.RuntimeId, out var done) && done;
+    }
+
+    private static bool HasScheduleBlockMeaningChanged(ScheduleBlock block, string title, int startMin, int endMin, string category)
+    {
+        return !string.Equals(block.Title, title, StringComparison.Ordinal) ||
+            block.StartMin != startMin ||
+            block.EndMin != endMin ||
+            !string.Equals(block.Category, category, StringComparison.Ordinal);
     }
 
     private void RemoveCompletedForBlocks(IEnumerable<ScheduleBlock> blocks)
