@@ -1120,15 +1120,26 @@ public sealed class MainWindow : Window
     {
         if (_activePage != "Advanced") return [];
 
+        var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-work-area"));
         var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-main-column"));
         var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-side-column"));
         var localActions = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-local-actions"));
+        var mainPoint = mainColumn?.TranslatePoint(new Point(0, 0), this);
+        var sidePoint = sideColumn?.TranslatePoint(new Point(0, 0), this);
+        var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
+        var stacked = mainPoint is not null &&
+            sidePoint is not null &&
+            sidePoint.Value.Y > mainPoint.Value.Y + Math.Min(mainColumn?.Bounds.Height ?? 0, 120);
 
         return
         [
+            $"advanced_work_area_width: {(workArea?.Bounds.Width ?? 0):0.##}",
             $"advanced_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
             $"advanced_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
-            $"advanced_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}",
+            $"advanced_compact_expected: {compactExpected}",
+            $"advanced_columns_stacked: {stacked}",
+            $"advanced_columns_stack_pass: {stacked == compactExpected}",
+            $"advanced_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 340)}",
             $"advanced_local_actions_wrap_panel: {localActions is WrapPanel}"
         ];
     }
@@ -1158,14 +1169,25 @@ public sealed class MainWindow : Window
     {
         if (_activePage != "Ai") return [];
 
+        var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-work-area"));
         var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-main-column"));
         var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-side-column"));
+        var mainPoint = mainColumn?.TranslatePoint(new Point(0, 0), this);
+        var sidePoint = sideColumn?.TranslatePoint(new Point(0, 0), this);
+        var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
+        var stacked = mainPoint is not null &&
+            sidePoint is not null &&
+            sidePoint.Value.Y > mainPoint.Value.Y + Math.Min(mainColumn?.Bounds.Height ?? 0, 120);
 
         return
         [
+            $"ai_settings_work_area_width: {(workArea?.Bounds.Width ?? 0):0.##}",
             $"ai_settings_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
             $"ai_settings_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
-            $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}"
+            $"ai_settings_compact_expected: {compactExpected}",
+            $"ai_settings_columns_stacked: {stacked}",
+            $"ai_settings_columns_stack_pass: {stacked == compactExpected}",
+            $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 340)}"
         ];
     }
 
@@ -7453,7 +7475,6 @@ public sealed class MainWindow : Window
     {
         var contentWidth = ResolveMainContentViewportWidth();
         var compact = contentWidth < 760;
-        var sideWidth = compact ? 280 : 330;
         var root = PageStack();
 
         var baseUrl = Input("Base URL", string.IsNullOrWhiteSpace(_aiSettings.BaseUrl) ? "https://api.openai.com/v1" : _aiSettings.BaseUrl);
@@ -7682,17 +7703,32 @@ public sealed class MainWindow : Window
         right.Children.Add(RenderAiSafetyPanel());
         right.Children.Add(RenderAiQuickExamples());
 
-        var columns = new Grid
+        if (compact)
         {
-            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
-            ColumnSpacing = compact ? 12 : 16,
-            Tag = "ai-settings-work-area"
-        };
-        Grid.SetColumn(left, 0);
-        Grid.SetColumn(right, 1);
-        columns.Children.Add(left);
-        columns.Children.Add(right);
-        root.Children.Add(columns);
+            var stack = new StackPanel
+            {
+                Spacing = 14,
+                Tag = "ai-settings-work-area"
+            };
+            stack.Children.Add(left);
+            stack.Children.Add(right);
+            root.Children.Add(stack);
+        }
+        else
+        {
+            var columns = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,330"),
+                ColumnSpacing = 16,
+                Tag = "ai-settings-work-area"
+            };
+            Grid.SetColumn(left, 0);
+            Grid.SetColumn(right, 1);
+            columns.Children.Add(left);
+            columns.Children.Add(right);
+            root.Children.Add(columns);
+        }
+
         var bottomActions = new WrapPanel { Orientation = Orientation.Horizontal };
         AddSelectionAction(bottomActions, saveButton);
         AddSelectionAction(bottomActions, saveAndChatButton, 0);
@@ -7951,26 +7987,40 @@ public sealed class MainWindow : Window
     {
         var contentWidth = ResolveMainContentViewportWidth();
         var compact = contentWidth < 760;
-        var sideWidth = compact ? 280 : 330;
         var root = PageStack();
 
-        var columns = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
-            ColumnSpacing = compact ? 12 : 16,
-            Tag = "advanced-work-area"
-        };
         var left = new StackPanel { Spacing = 14, Tag = "advanced-main-column" };
         left.Children.Add(RenderPreferenceSettings());
         left.Children.Add(RenderLocalDataMaintenance());
         var right = new StackPanel { Spacing = 14, Tag = "advanced-side-column" };
         right.Children.Add(RenderDataDirectoryPanel());
         right.Children.Add(RenderAdvancedSnapshot());
-        Grid.SetColumn(left, 0);
-        Grid.SetColumn(right, 1);
-        columns.Children.Add(left);
-        columns.Children.Add(right);
-        root.Children.Add(columns);
+        if (compact)
+        {
+            var stack = new StackPanel
+            {
+                Spacing = 14,
+                Tag = "advanced-work-area"
+            };
+            stack.Children.Add(left);
+            stack.Children.Add(right);
+            root.Children.Add(stack);
+        }
+        else
+        {
+            var columns = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,330"),
+                ColumnSpacing = 16,
+                Tag = "advanced-work-area"
+            };
+            Grid.SetColumn(left, 0);
+            Grid.SetColumn(right, 1);
+            columns.Children.Add(left);
+            columns.Children.Add(right);
+            root.Children.Add(columns);
+        }
+
         return Scroll(root);
     }
 
