@@ -985,6 +985,16 @@ public sealed class MainWindow : Window
             _state.Completed.TryGetValue(block.RuntimeId, out var done) &&
             done);
         var taskCount = _daySchedule.Blocks.Count(block => block.Type == ScheduleBlockType.Task);
+        var overviewButtonLabels = visibleControls
+            .OfType<Button>()
+            .Select(button => ControlText(button.Content))
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Select(text => text.ReplaceLineEndings(" ").Trim())
+            .Distinct()
+            .ToList();
+        var hasQuickActions = visibleControls
+            .OfType<TextBlock>()
+            .Any(text => string.Equals(text.Text, "快捷入口", StringComparison.Ordinal));
 
         return
         [
@@ -998,7 +1008,9 @@ public sealed class MainWindow : Window
             $"overview_completion_done: {completion.Done}",
             $"overview_completion_total: {completion.Total}",
             $"overview_completion_completed_fixed_count: {completedFixedCount}",
-            $"overview_completion_fixed_ignored: {completedFixedCount > 0 && completion.Total == taskCount}"
+            $"overview_completion_fixed_ignored: {completedFixedCount > 0 && completion.Total == taskCount}",
+            $"overview_quick_actions_visible: {hasQuickActions}",
+            $"overview_reminder_button_visible: {overviewButtonLabels.Contains("复制今日提醒")}"
         ];
     }
 
@@ -1609,7 +1621,6 @@ public sealed class MainWindow : Window
         var side = new StackPanel { Spacing = 12 };
         side.Children.Add(ProgressCard(completion));
         side.Children.Add(RenderOverviewDayHealth(visibleBlocks));
-        side.Children.Add(RenderOverviewActions());
         Grid.SetColumn(side, 1);
         grid.Children.Add(side);
 
@@ -1849,30 +1860,6 @@ public sealed class MainWindow : Window
         }
 
         return (bestStart, bestEnd, Math.Max(0, bestEnd - bestStart));
-    }
-
-    private Control RenderOverviewActions()
-    {
-        var root = new StackPanel { Spacing = 8 };
-        root.Children.Add(Button("新建日程", async (_, _) =>
-        {
-            _activePage = "Schedule";
-            _state.Preferences.StartupPage = "Schedule";
-            await CreateScheduleBlockInDayViewAsync(ResolveDefaultNewBlockStartMin());
-        }));
-        root.Children.Add(Button("复制今日提醒", async (_, _) =>
-        {
-            var reminder = _reminderService.Generate(_daySchedule);
-            await (Clipboard?.SetTextAsync(reminder) ?? Task.CompletedTask);
-            SetStatus("提醒已复制到剪贴板");
-        }, secondary: true));
-        root.Children.Add(Button("打开对话", (_, _) =>
-        {
-            _activePage = "Chat";
-            _state.Preferences.StartupPage = "Chat";
-            RenderActivePage();
-        }, secondary: true));
-        return Card("快捷入口", root);
     }
 
     private Control RenderChat()
