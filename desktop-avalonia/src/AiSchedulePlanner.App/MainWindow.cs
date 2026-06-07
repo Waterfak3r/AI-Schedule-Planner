@@ -2436,6 +2436,9 @@ public sealed class MainWindow : Window
             appliedWarningCount += result.Results.Count(item => item.Status == "applied" && HasActionWarnings(item));
             changedDates.Add(group.Date);
             var nextSchedule = result.NextSchedule.Clone();
+            RemoveCompletedForBlocks(result.Results
+                .Where(item => item.Status == "applied" && item.RemovedBlock is not null)
+                .Select(item => item.RemovedBlock!));
             _state.DayOverrides[DateKey(group.Date)] = nextSchedule.Clone();
             SyncDayIntoWeekPlan(nextSchedule);
             issues.AddRange(ComputeManualScheduleIssues(nextSchedule));
@@ -4371,6 +4374,7 @@ public sealed class MainWindow : Window
             }
 
             CaptureUndo("删除日程");
+            RemoveCompletedForRuntimeIds([block.RuntimeId]);
             _daySchedule.Blocks.RemoveAll(item => item.RuntimeId == block.RuntimeId && item.Editable);
             _selectedRuntimeIds.Remove(block.RuntimeId);
             SaveCurrentDayOverride($"已删除 {block.Title}");
@@ -4396,10 +4400,18 @@ public sealed class MainWindow : Window
             }
 
             CaptureUndo(isNew ? "新建日程" : "编辑日程");
+            var shouldClearCompleted = !isNew &&
+                IsBlockCompleted(block) &&
+                !string.Equals(block.Title, nextTitle, StringComparison.Ordinal);
             block.Title = nextTitle;
             block.StartMin = startMin.Value;
             block.EndMin = endMin.Value;
             block.Category = category.SelectedItem is CategoryOption option ? option.Value : "other";
+            if (shouldClearCompleted)
+            {
+                _state.Completed.Remove(block.RuntimeId);
+            }
+
             if (isNew)
             {
                 _daySchedule.Blocks.Add(block);
@@ -7507,9 +7519,13 @@ public sealed class MainWindow : Window
         }
 
         CaptureUndo("删除日程");
+        var deleted = _daySchedule.Blocks
+            .Where(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable)
+            .ToList();
         var before = _daySchedule.Blocks.Count;
         _daySchedule.Blocks.RemoveAll(block => _selectedRuntimeIds.Contains(block.RuntimeId) && block.Editable);
         var changed = before - _daySchedule.Blocks.Count;
+        RemoveCompletedForBlocks(deleted);
         _selectedRuntimeIds.Clear();
         SaveCurrentDayOverride($"已删除 {changed} 个日程");
         RenderActivePage();
@@ -7745,6 +7761,19 @@ public sealed class MainWindow : Window
     private bool IsBlockCompleted(ScheduleBlock block)
     {
         return IsCompletableBlock(block) && _state.Completed.TryGetValue(block.RuntimeId, out var done) && done;
+    }
+
+    private void RemoveCompletedForBlocks(IEnumerable<ScheduleBlock> blocks)
+    {
+        RemoveCompletedForRuntimeIds(blocks.Select(block => block.RuntimeId));
+    }
+
+    private void RemoveCompletedForRuntimeIds(IEnumerable<string> runtimeIds)
+    {
+        foreach (var runtimeId in runtimeIds)
+        {
+            _state.Completed.Remove(runtimeId);
+        }
     }
 
     private async Task ToggleBlockCompleteAsync(ScheduleBlock block)
