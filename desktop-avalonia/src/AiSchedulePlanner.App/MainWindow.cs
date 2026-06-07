@@ -499,6 +499,12 @@ public sealed class MainWindow : Window
             case "schedule-week":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Week, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
                 break;
+            case "schedule-day-today":
+                ApplyTodayScheduleReviewScenario(ScheduleViewMode.Day);
+                break;
+            case "schedule-week-today":
+                ApplyTodayScheduleReviewScenario(ScheduleViewMode.Week);
+                break;
             case "schedule-month":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Month, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
                 break;
@@ -733,6 +739,12 @@ public sealed class MainWindow : Window
         }
 
         RenderActivePage();
+    }
+
+    private void ApplyTodayScheduleReviewScenario(ScheduleViewMode viewMode)
+    {
+        _focusDate = DateOnly.FromDateTime(DateTime.Today);
+        ApplyScheduleReviewScenario(viewMode, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
     }
 
     private void ApplyChatWarningsReviewScenario()
@@ -971,6 +983,10 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildCurrentTimeAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
         foreach (var row in BuildChatAuditRows(visibleControls, visibleTexts, buttonLabels))
         {
             report.AppendLine(row);
@@ -1072,6 +1088,63 @@ public sealed class MainWindow : Window
             $"ai_settings_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
             $"ai_settings_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
             $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}"
+        ];
+    }
+
+    private IReadOnlyList<string> BuildCurrentTimeAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Schedule") return [];
+
+        var now = CurrentMinute();
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var inRange = now >= TimeText.FullDayStartMin && now <= TimeText.FullDayEndMin;
+        var weekTodayIndex = _weekPlan.Days.FindIndex(day => day.Date == today);
+        var dayExpected = _scheduleView == ScheduleViewMode.Day && _focusDate == today && inRange;
+        var weekExpected = _scheduleView == ScheduleViewMode.Week && weekTodayIndex >= 0 && inRange;
+
+        var dayLine = visibleControls.FirstOrDefault(control => Equals(control.Tag, "day-current-time-line"));
+        var dayLabel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "day-current-time-label"));
+        var weekLine = visibleControls.FirstOrDefault(control => Equals(control.Tag, "week-current-time-line"));
+        var weekDot = visibleControls.FirstOrDefault(control => Equals(control.Tag, "week-current-time-dot"));
+
+        var expectedDayY = DayTopOffset + now * DayPixelsPerMinute;
+        var actualDayY = CanvasTop(dayLine);
+        var expectedWeekX = weekTodayIndex >= 0 ? WeekTimeLabelWidth + weekTodayIndex * _weekDayWidth : double.NaN;
+        var expectedWeekY = now * WeekPixelsPerMinute;
+        var actualWeekX = CanvasLeft(weekLine);
+        var actualWeekY = CanvasTop(weekLine);
+
+        var dayLinePresencePass = dayExpected == (dayLine is not null);
+        var dayLabelPresencePass = dayExpected == (dayLabel is not null);
+        var weekLinePresencePass = weekExpected == (weekLine is not null);
+        var weekDotPresencePass = weekExpected == (weekDot is not null);
+        var dayYPass = !dayExpected || NearlyEqual(actualDayY, expectedDayY);
+        var weekXPass = !weekExpected || NearlyEqual(actualWeekX, expectedWeekX);
+        var weekYPass = !weekExpected || NearlyEqual(actualWeekY, expectedWeekY);
+
+        return
+        [
+            $"current_time_minute: {now}",
+            $"current_time_in_timeline_range: {inRange}",
+            $"day_current_time_line_expected: {dayExpected}",
+            $"day_current_time_line_present: {dayLine is not null}",
+            $"day_current_time_label_present: {dayLabel is not null}",
+            $"day_current_time_line_y: {actualDayY:0.##}",
+            $"day_current_time_line_expected_y: {expectedDayY:0.##}",
+            $"day_current_time_line_presence_pass: {dayLinePresencePass}",
+            $"day_current_time_label_presence_pass: {dayLabelPresencePass}",
+            $"day_current_time_line_y_pass: {dayYPass}",
+            $"week_current_time_line_expected: {weekExpected}",
+            $"week_current_time_line_present: {weekLine is not null}",
+            $"week_current_time_dot_present: {weekDot is not null}",
+            $"week_current_time_line_x: {actualWeekX:0.##}",
+            $"week_current_time_line_expected_x: {expectedWeekX:0.##}",
+            $"week_current_time_line_y: {actualWeekY:0.##}",
+            $"week_current_time_line_expected_y: {expectedWeekY:0.##}",
+            $"week_current_time_line_presence_pass: {weekLinePresencePass}",
+            $"week_current_time_dot_presence_pass: {weekDotPresencePass}",
+            $"week_current_time_line_x_pass: {weekXPass}",
+            $"week_current_time_line_y_pass: {weekYPass}"
         ];
     }
 
@@ -4421,6 +4494,7 @@ public sealed class MainWindow : Window
         var y = DayTopOffset + now * DayPixelsPerMinute;
         var line = TimelineDecoration(new Border
         {
+            Tag = "day-current-time-line",
             Background = Brush("#ef4444"),
             Width = _dayEventWidth + 34,
             Height = 2,
@@ -4432,6 +4506,7 @@ public sealed class MainWindow : Window
 
         var label = TimelineDecoration(new Border
         {
+            Tag = "day-current-time-label",
             Background = Brush("#ef4444"),
             CornerRadius = new CornerRadius(9),
             Padding = new Thickness(7, 2),
@@ -4440,6 +4515,27 @@ public sealed class MainWindow : Window
         Canvas.SetLeft(label, DayLabelWidth + Math.Max(8, _dayEventWidth - 74));
         Canvas.SetTop(label, Math.Max(2, y - 11));
         canvas.Children.Add(label);
+    }
+
+    private static double CanvasLeft(Control? control)
+    {
+        if (control is null) return double.NaN;
+
+        var value = Canvas.GetLeft(control);
+        return double.IsNaN(value) ? 0 : value;
+    }
+
+    private static double CanvasTop(Control? control)
+    {
+        if (control is null) return double.NaN;
+
+        var value = Canvas.GetTop(control);
+        return double.IsNaN(value) ? 0 : value;
+    }
+
+    private static bool NearlyEqual(double actual, double expected, double tolerance = 0.75)
+    {
+        return !double.IsNaN(actual) && !double.IsNaN(expected) && Math.Abs(actual - expected) <= tolerance;
     }
 
     private async Task<bool> CreateScheduleBlockInDayViewAsync(int startMin, int? endMin = null)
@@ -5968,6 +6064,7 @@ public sealed class MainWindow : Window
         var y = now * WeekPixelsPerMinute;
         var line = TimelineDecoration(new Border
         {
+            Tag = "week-current-time-line",
             Background = Brush("#ef4444"),
             Width = _weekDayWidth,
             Height = 2,
@@ -5979,6 +6076,7 @@ public sealed class MainWindow : Window
 
         var dot = TimelineDecoration(new Border
         {
+            Tag = "week-current-time-dot",
             Background = Brush("#ef4444"),
             Width = 8,
             Height = 8,
