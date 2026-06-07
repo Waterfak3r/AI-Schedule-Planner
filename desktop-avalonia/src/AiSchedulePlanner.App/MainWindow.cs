@@ -1917,6 +1917,22 @@ public sealed class MainWindow : Window
         return probe.DesiredSize.Width;
     }
 
+    private static bool StartsWithClockText(string? text)
+    {
+        var value = (text ?? "").TrimStart();
+        if (value.StartsWith("✓ ", StringComparison.Ordinal))
+        {
+            value = value[2..].TrimStart();
+        }
+
+        return value.Length >= 5 &&
+            char.IsDigit(value[0]) &&
+            char.IsDigit(value[1]) &&
+            value[2] == ':' &&
+            char.IsDigit(value[3]) &&
+            char.IsDigit(value[4]);
+    }
+
     private static bool IsDarkSolidBrush(IBrush? brush)
     {
         if (brush is not ISolidColorBrush solid)
@@ -1974,6 +1990,8 @@ public sealed class MainWindow : Window
         rows.Add($"week_event_compact_label_count: {compactEventLabels.Count}");
         rows.Add($"week_event_wrapping_label_count: {eventLabels.Count(label => label.TextWrapping != TextWrapping.NoWrap)}");
         rows.Add($"week_event_compact_label_newline_count: {compactEventLabels.Count(label => (label.Text ?? "").Contains('\n'))}");
+        rows.Add($"week_event_label_time_first_count: {eventLabels.Count(label => StartsWithClockText(label.Text))}");
+        rows.Add($"week_event_title_first_pass: {eventLabels.All(label => !StartsWithClockText(label.Text))}");
         rows.Add($"week_event_compact_label_pass: {eventLabels.All(label => label.TextWrapping == TextWrapping.NoWrap) && compactEventLabels.All(label => !(label.Text ?? "").Contains('\n'))}");
 
         if (header is null || scroller is null)
@@ -4074,8 +4092,8 @@ public sealed class MainWindow : Window
     {
         var panelCollapsed = IsSchedulePanelEffectivelyCollapsed();
         var compact = ResolveMainContentViewportWidth() < 760;
-        var panelWidth = compact ? 220 : 240;
-        var panelSpacing = compact ? 12 : 16;
+        var panelWidth = compact ? 210 : 224;
+        var panelSpacing = compact ? 10 : 12;
         var issues = GetScheduleIssuesForDisplay();
         var root = new Grid
         {
@@ -5596,7 +5614,7 @@ public sealed class MainWindow : Window
         if (compact)
         {
             var compactPrefix = done ? "✓ " : "";
-            var compactLabel = Text($"{compactPrefix}{block.Start} {block.Title}{titleSuffix}", ultraNarrow ? 11 : 12, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
+            var compactLabel = Text($"{compactPrefix}{block.Title}{titleSuffix} · {block.Start}", ultraNarrow ? 11 : 12, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
             compactLabel.Tag = $"day-event-label:{block.RuntimeId}:compact";
             compactLabel.LineHeight = ultraNarrow ? 13 : 14;
             compactLabel.TextWrapping = TextWrapping.NoWrap;
@@ -5661,7 +5679,7 @@ public sealed class MainWindow : Window
             else if (resizeCompactLabel is not null)
             {
                 var compactPrefix = done ? "✓ " : "";
-                resizeCompactLabel.Text = $"{compactPrefix}{block.Start}-{TimeText.ToTime(previewEnd)} {block.Title}{titleSuffix}";
+                resizeCompactLabel.Text = $"{compactPrefix}{block.Title}{titleSuffix} · {block.Start}-{TimeText.ToTime(previewEnd)}";
             }
             border.Opacity = 0.86;
             args.Handled = true;
@@ -7132,7 +7150,9 @@ public sealed class MainWindow : Window
             compactLabel || narrow ? 10 : 11,
             done ? "#64748b" : current ? "#991b1b" : "#0f172a",
             FontWeight.SemiBold);
-        eventLabel.Tag = compactLabel ? "week-event-label:compact" : "week-event-label:full";
+        eventLabel.Tag = compactLabel
+            ? $"week-event-label:{block.RuntimeId}:compact"
+            : $"week-event-label:{block.RuntimeId}:full";
         eventLabel.TextWrapping = TextWrapping.NoWrap;
         eventLabel.TextTrimming = TextTrimming.CharacterEllipsis;
         var eventContent = new Grid
@@ -7396,8 +7416,8 @@ public sealed class MainWindow : Window
         var prefix = done ? "✓ " : "";
         var end = TimeText.ToTime(previewEndMin ?? block.EndMin);
         return IsCompactWeekEvent(layout)
-            ? $"{prefix}{block.Start} {block.Title}"
-            : $"{prefix}{block.Start}-{end}\n{block.Title}";
+            ? $"{prefix}{block.Title} · {block.Start}"
+            : $"{prefix}{block.Title} · {block.Start}-{end}";
     }
 
     private bool IsCompactWeekEvent(TimelineEventLayout layout) => _weekDayWidth < 78 || layout.LaneCount > 1 || WeekEventWidth(layout) < 72;
