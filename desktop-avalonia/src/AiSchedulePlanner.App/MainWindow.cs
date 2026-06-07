@@ -1253,6 +1253,7 @@ public sealed class MainWindow : Window
     {
         if (_activePage != "Overview") return [];
 
+        var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-work-area"));
         var summary = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-day-summary-strip"));
         var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-main-column"));
         var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-side-column"));
@@ -1274,6 +1275,12 @@ public sealed class MainWindow : Window
         var nearToday = summaryPoint is not null &&
             titlePoint is not null &&
             Math.Abs(summaryPoint.Value.Y + (summary?.Bounds.Height ?? 0) / 2 - titlePoint.Value.Y - (todayTitle?.Bounds.Height ?? 0) / 2) <= 18;
+        var mainPoint = mainColumn?.TranslatePoint(new Point(0, 0), this);
+        var sidePoint = sideColumn?.TranslatePoint(new Point(0, 0), this);
+        var compactExpected = ResolveMainContentViewportWidth() < 760;
+        var columnsStacked = mainPoint is not null &&
+            sidePoint is not null &&
+            sidePoint.Value.Y > mainPoint.Value.Y + Math.Min(mainColumn?.Bounds.Height ?? 0, 120);
         var completionFillRatio = completionTrack is null || completionTrack.Bounds.Width <= 0
             ? double.NaN
             : (completionFill?.Bounds.Width ?? 0) / completionTrack.Bounds.Width;
@@ -1299,6 +1306,10 @@ public sealed class MainWindow : Window
             $"overview_day_summary_strip_visible: {summary is not null}",
             $"overview_day_summary_chips: {string.Join(" | ", chips)}",
             $"overview_day_summary_near_today: {nearToday}",
+            $"overview_work_area_width: {(workArea?.Bounds.Width ?? 0):0.##}",
+            $"overview_compact_expected: {compactExpected}",
+            $"overview_columns_stacked: {columnsStacked}",
+            $"overview_columns_stack_pass: {(compactExpected ? columnsStacked : !columnsStacked)}",
             $"overview_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
             $"overview_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
             $"overview_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}",
@@ -1947,31 +1958,44 @@ public sealed class MainWindow : Window
         var visibleBlocks = _daySchedule.Blocks.Where(IsVisibleBlock).OrderBy(block => block.StartMin).ToList();
         var contentWidth = ResolveMainContentViewportWidth();
         var compact = contentWidth < 760;
-        var sideWidth = compact ? 280 : 320;
 
         var page = PageStack();
         page.Children.Add(RenderOverviewHeader());
 
-        var grid = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
-            ColumnSpacing = compact ? 12 : 16,
-            Tag = "overview-work-area"
-        };
-
         var main = new StackPanel { Spacing = 14, Tag = "overview-main-column" };
         main.Children.Add(RenderOverviewHero(visibleBlocks, compact));
         main.Children.Add(RenderOverviewTimeline(visibleBlocks));
-        Grid.SetColumn(main, 0);
-        grid.Children.Add(main);
 
         var side = new StackPanel { Spacing = 12, Tag = "overview-side-column" };
         side.Children.Add(ProgressCard(completion));
         side.Children.Add(RenderOverviewDayHealth(visibleBlocks));
-        Grid.SetColumn(side, 1);
-        grid.Children.Add(side);
 
-        page.Children.Add(grid);
+        if (compact)
+        {
+            var stack = new StackPanel
+            {
+                Spacing = 14,
+                Tag = "overview-work-area"
+            };
+            stack.Children.Add(main);
+            stack.Children.Add(side);
+            page.Children.Add(stack);
+        }
+        else
+        {
+            var grid = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,320"),
+                ColumnSpacing = 16,
+                Tag = "overview-work-area"
+            };
+            Grid.SetColumn(main, 0);
+            Grid.SetColumn(side, 1);
+            grid.Children.Add(main);
+            grid.Children.Add(side);
+            page.Children.Add(grid);
+        }
+
         return Scroll(page);
     }
 
