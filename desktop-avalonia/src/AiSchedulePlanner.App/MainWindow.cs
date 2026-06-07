@@ -49,6 +49,8 @@ public sealed class MainWindow : Window
     private const double SidebarCollapsedWidth = 76;
     private const double ScheduleAutoCollapsePanelViewportWidth = 900;
     private const double ScheduleAutoCollapseSidebarWindowWidth = 1080;
+    private static readonly string[] MiniMonthWeekdayLabels = ["一", "二", "三", "四", "五", "六", "日"];
+    private static readonly string[] MonthWeekdayHeaderLabels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
     private readonly IPlannerStore _store;
     private readonly IScheduleEngine _scheduleEngine = new ScheduleEngine();
@@ -1534,9 +1536,28 @@ public sealed class MainWindow : Window
         var compactEventLabels = eventLabels
             .Where(control => control.Tag is string tag && tag.EndsWith(":compact", StringComparison.OrdinalIgnoreCase))
             .ToList();
+        var weekdayHeaders = visibleControls
+            .OfType<TextBlock>()
+            .Where(control => Equals(control.Tag, "week-weekday-header"))
+            .Select(control => control.Text ?? "")
+            .ToList();
+        var weekdayHeadersMondayFirst = weekdayHeaders.Count == 7 && weekdayHeaders.SequenceEqual(MonthWeekdayHeaderLabels);
+        var weekDates = _weekPlan.Days.Select(day => day.Date).ToList();
+        var weekContiguous = weekDates.Count == 7 &&
+            weekDates.Select((date, index) => date == weekDates[0].AddDays(index)).All(match => match);
         var headerInsideScroller = header?.GetVisualAncestors().OfType<ScrollViewer>().Any() == true;
         var bodyInsideScroller = body?.GetVisualAncestors().OfType<ScrollViewer>().Any() == true;
 
+        rows.Add("calendar_first_day_of_week: Monday");
+        rows.Add($"week_start_date: {(weekDates.Count == 0 ? "" : weekDates[0].ToString("yyyy-MM-dd"))}");
+        rows.Add($"week_end_date: {(weekDates.Count == 0 ? "" : weekDates[^1].ToString("yyyy-MM-dd"))}");
+        rows.Add($"week_day_dates: {string.Join(" | ", weekDates.Select(date => date.ToString("yyyy-MM-dd")))}");
+        rows.Add($"week_starts_monday_pass: {weekDates.Count == 7 && weekDates[0].DayOfWeek == DayOfWeek.Monday}");
+        rows.Add($"week_ends_sunday_pass: {weekDates.Count == 7 && weekDates[^1].DayOfWeek == DayOfWeek.Sunday}");
+        rows.Add($"week_contiguous_7_days_pass: {weekContiguous}");
+        rows.Add($"week_weekday_headers: {string.Join(" | ", weekdayHeaders)}");
+        rows.Add($"week_first_weekday_header: {weekdayHeaders.FirstOrDefault() ?? ""}");
+        rows.Add($"week_weekday_headers_monday_first: {weekdayHeadersMondayFirst}");
         rows.Add($"week_header_present: {header is not null}");
         rows.Add($"week_body_present: {body is not null}");
         rows.Add($"week_body_scroller_present: {scroller is not null}");
@@ -1579,12 +1600,49 @@ public sealed class MainWindow : Window
             .Where(control => control.Tag is DateOnly)
             .ToList();
         var dayCells = dayCellControls.Count;
+        var dayCellDates = dayCellControls
+            .Select(control => control.Tag is DateOnly date ? date : (DateOnly?)null)
+            .Where(date => date.HasValue)
+            .Select(date => date!.Value)
+            .ToList();
+        var visibleStartDate = dayCellDates.Count == 0 ? (DateOnly?)null : dayCellDates.Min();
+        var visibleEndDate = dayCellDates.Count == 0 ? (DateOnly?)null : dayCellDates.Max();
+        var firstOfMonth = new DateOnly(_focusDate.Year, _focusDate.Month, 1);
+        var firstOfMonthCell = dayCellControls.FirstOrDefault(control => control.Tag is DateOnly date && date == firstOfMonth);
+        var firstOfMonthColumn = firstOfMonthCell is null ? -1 : Grid.GetColumn(firstOfMonthCell);
+        var expectedFirstOfMonthColumn = MondayFirstWeekdayIndex(firstOfMonth);
+        var firstRowDates = dayCellControls
+            .Where(control => Grid.GetRow(control) == 1)
+            .OrderBy(Grid.GetColumn)
+            .Select(control => control.Tag is DateOnly date ? date.ToString("yyyy-MM-dd") : "")
+            .ToList();
+        var expectedFirstRowDates = visibleStartDate is null
+            ? []
+            : Enumerable.Range(0, 7).Select(offset => visibleStartDate.Value.AddDays(offset).ToString("yyyy-MM-dd")).ToList();
+        var firstRowDatesPass = firstRowDates.SequenceEqual(expectedFirstRowDates);
+        var miniMonthStartOffset = MondayFirstWeekdayIndex(firstOfMonth);
+        var miniMonthFocusedColumn = _focusDate.Month == firstOfMonth.Month && _focusDate.Year == firstOfMonth.Year
+            ? MondayFirstWeekdayIndex(_focusDate)
+            : -1;
         var focusedCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == _focusDate);
         var today = DateOnly.FromDateTime(DateTime.Today);
         var todayCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == today);
         var weekdayHeaders = visibleControls
             .Where(control => Equals(control.Tag, "month-weekday-header"))
             .ToList();
+        var monthWeekdayLabels = visibleControls
+            .OfType<TextBlock>()
+            .Where(control => Equals(control.Tag, "month-weekday-label"))
+            .Select(control => control.Text ?? "")
+            .ToList();
+        var miniMonthWeekdayLabels = visibleControls
+            .OfType<TextBlock>()
+            .Where(control => Equals(control.Tag, "mini-month-weekday-header"))
+            .Select(control => control.Text ?? "")
+            .ToList();
+        var monthWeekdayHeadersMondayFirst = monthWeekdayLabels.SequenceEqual(MonthWeekdayHeaderLabels);
+        var miniMonthWeekdayHeadersMondayFirst = miniMonthWeekdayLabels.Count == 0 ||
+            miniMonthWeekdayLabels.SequenceEqual(MiniMonthWeekdayLabels);
         var chips = visibleControls
             .Where(control => control.Tag is string tag && tag.StartsWith("month-chip:", StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -1602,6 +1660,26 @@ public sealed class MainWindow : Window
         [
             $"month_grid_present: {monthGrid is not null}",
             $"month_weekday_header_count: {weekdayHeaders.Count}",
+            $"calendar_first_day_of_week: Monday",
+            $"month_weekday_headers: {string.Join(" | ", monthWeekdayLabels)}",
+            $"month_first_weekday_header: {monthWeekdayLabels.FirstOrDefault() ?? ""}",
+            $"month_weekday_headers_monday_first: {monthWeekdayHeadersMondayFirst}",
+            $"mini_month_weekday_headers: {string.Join(" | ", miniMonthWeekdayLabels)}",
+            $"mini_month_first_weekday_header: {miniMonthWeekdayLabels.FirstOrDefault() ?? ""}",
+            $"mini_month_weekday_headers_monday_first: {miniMonthWeekdayHeadersMondayFirst}",
+            $"calendar_first_day_consistent: {monthWeekdayHeadersMondayFirst && miniMonthWeekdayHeadersMondayFirst}",
+            $"month_visible_start_date: {visibleStartDate?.ToString("yyyy-MM-dd") ?? ""}",
+            $"month_visible_start_day_of_week: {visibleStartDate?.DayOfWeek.ToString() ?? ""}",
+            $"month_visible_end_date: {visibleEndDate?.ToString("yyyy-MM-dd") ?? ""}",
+            $"month_visible_end_day_of_week: {visibleEndDate?.DayOfWeek.ToString() ?? ""}",
+            $"month_visible_range_monday_to_sunday_pass: {visibleStartDate?.DayOfWeek == DayOfWeek.Monday && visibleEndDate?.DayOfWeek == DayOfWeek.Sunday}",
+            $"month_day1_column: {firstOfMonthColumn}",
+            $"month_day1_expected_column: {expectedFirstOfMonthColumn}",
+            $"month_day1_column_pass: {firstOfMonthColumn == expectedFirstOfMonthColumn}",
+            $"month_first_row_dates: {string.Join(" | ", firstRowDates)}",
+            $"month_first_row_dates_pass: {firstRowDatesPass}",
+            $"mini_month_start_offset: {miniMonthStartOffset}",
+            $"mini_month_focused_date_column: {miniMonthFocusedColumn}",
             $"month_day_cell_count: {dayCells}",
             $"month_focused_cell_present: {focusedCellPresent}",
             $"month_today_cell_present: {todayCellPresent}",
@@ -4234,7 +4312,7 @@ public sealed class MainWindow : Window
         var first = new DateOnly(_focusDate.Year, _focusDate.Month, 1);
         var last = first.AddMonths(1).AddDays(-1);
         var daysInMonth = DateTime.DaysInMonth(_focusDate.Year, _focusDate.Month);
-        var startOffset = (int)first.DayOfWeek;
+        var startOffset = MondayFirstWeekdayIndex(first);
         var monthSchedules = BuildMonthSchedules(first, last);
 
         var root = new StackPanel { Spacing = 10 };
@@ -4290,9 +4368,10 @@ public sealed class MainWindow : Window
         root.Children.Add(quick);
 
         var grid = new UniformGrid { Columns = 7 };
-        foreach (var day in new[] { "日", "一", "二", "三", "四", "五", "六" })
+        foreach (var day in MiniMonthWeekdayLabels)
         {
             var weekday = Text(day, 11, "#64748b", FontWeight.SemiBold);
+            weekday.Tag = "mini-month-weekday-header";
             weekday.HorizontalAlignment = HorizontalAlignment.Center;
             grid.Children.Add(weekday);
         }
@@ -5450,8 +5529,8 @@ public sealed class MainWindow : Window
     {
         var firstOfMonth = new DateOnly(_focusDate.Year, _focusDate.Month, 1);
         var lastOfMonth = firstOfMonth.AddMonths(1).AddDays(-1);
-        var visibleStart = firstOfMonth.AddDays(-(int)firstOfMonth.DayOfWeek);
-        var visibleEnd = lastOfMonth.AddDays(6 - (int)lastOfMonth.DayOfWeek);
+        var visibleStart = TimeText.MondayOfWeek(firstOfMonth);
+        var visibleEnd = TimeText.MondayOfWeek(lastOfMonth).AddDays(6);
         var dayCount = visibleEnd.DayNumber - visibleStart.DayNumber + 1;
         var rowCount = Math.Max(5, dayCount / 7);
         visibleEnd = visibleStart.AddDays(rowCount * 7 - 1);
@@ -5468,9 +5547,10 @@ public sealed class MainWindow : Window
             ClipToBounds = true
         };
 
-        foreach (var (name, column) in new[] { "周日", "周一", "周二", "周三", "周四", "周五", "周六" }.Select((name, column) => (name, column)))
+        foreach (var (name, column) in MonthWeekdayHeaderLabels.Select((name, column) => (name, column)))
         {
             var label = MonthSingleLineText(name, 12, "#5f6368", FontWeight.SemiBold);
+            label.Tag = "month-weekday-label";
             label.HorizontalAlignment = HorizontalAlignment.Center;
             label.VerticalAlignment = VerticalAlignment.Center;
             var header = new Border
@@ -6202,6 +6282,7 @@ public sealed class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center
         };
         var weekday = Text($"周{WeekdayText(day.Date)}", compact ? 10 : 11, focused || today ? "#1a73e8" : "#64748b", FontWeight.SemiBold);
+        weekday.Tag = "week-weekday-header";
         weekday.HorizontalAlignment = HorizontalAlignment.Center;
         headerStack.Children.Add(weekday);
         headerStack.Children.Add(BuildWeekDateBadge(day.Date, focused, today, compact));
@@ -8769,6 +8850,11 @@ public sealed class MainWindow : Window
     }
 
     private static string WeekdayText(DateOnly date) => "日一二三四五六"[(int)date.DayOfWeek].ToString();
+
+    private static int MondayFirstWeekdayIndex(DateOnly date)
+    {
+        return date.DayOfWeek == DayOfWeek.Sunday ? 6 : (int)date.DayOfWeek - 1;
+    }
 
     private Button NavButton(string text, string page)
     {
