@@ -971,6 +971,8 @@ public sealed class MainWindow : Window
         if (_activePage != "Overview") return [];
 
         var summary = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-day-summary-strip"));
+        var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-main-column"));
+        var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-side-column"));
         var completionTrack = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-completion-track"));
         var completionFill = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-completion-fill"));
         var todayTitle = visibleControls
@@ -1014,6 +1016,9 @@ public sealed class MainWindow : Window
             $"overview_day_summary_strip_visible: {summary is not null}",
             $"overview_day_summary_chips: {string.Join(" | ", chips)}",
             $"overview_day_summary_near_today: {nearToday}",
+            $"overview_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
+            $"overview_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
+            $"overview_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}",
             $"overview_completion_track_width: {(completionTrack?.Bounds.Width ?? 0):0.##}",
             $"overview_completion_fill_width: {(completionFill?.Bounds.Width ?? 0):0.##}",
             $"overview_completion_fill_ratio: {completionFillRatio:0.###}",
@@ -1587,23 +1592,27 @@ public sealed class MainWindow : Window
     {
         var completion = GetCompletionStats(_daySchedule);
         var visibleBlocks = _daySchedule.Blocks.Where(IsVisibleBlock).OrderBy(block => block.StartMin).ToList();
+        var contentWidth = ResolveMainContentViewportWidth();
+        var compact = contentWidth < 760;
+        var sideWidth = compact ? 280 : 320;
 
         var page = PageStack();
         page.Children.Add(RenderOverviewHeader());
 
         var grid = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,320"),
-            ColumnSpacing = 16
+            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
+            ColumnSpacing = compact ? 12 : 16,
+            Tag = "overview-work-area"
         };
 
-        var main = new StackPanel { Spacing = 14 };
-        main.Children.Add(RenderOverviewHero(visibleBlocks));
+        var main = new StackPanel { Spacing = 14, Tag = "overview-main-column" };
+        main.Children.Add(RenderOverviewHero(visibleBlocks, compact));
         main.Children.Add(RenderOverviewTimeline(visibleBlocks));
         Grid.SetColumn(main, 0);
         grid.Children.Add(main);
 
-        var side = new StackPanel { Spacing = 12 };
+        var side = new StackPanel { Spacing = 12, Tag = "overview-side-column" };
         side.Children.Add(ProgressCard(completion));
         side.Children.Add(RenderOverviewDayHealth(visibleBlocks));
         Grid.SetColumn(side, 1);
@@ -1635,7 +1644,7 @@ public sealed class MainWindow : Window
         return grid;
     }
 
-    private Control RenderOverviewHero(IReadOnlyList<ScheduleBlock> visibleBlocks)
+    private Control RenderOverviewHero(IReadOnlyList<ScheduleBlock> visibleBlocks, bool compact)
     {
         var now = CurrentMinute();
         var current = IsFocusDateToday()
@@ -1645,35 +1654,58 @@ public sealed class MainWindow : Window
             ?? visibleBlocks.FirstOrDefault();
         var target = current ?? next;
 
-        var root = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var text = new StackPanel { Spacing = 8 };
         text.Children.Add(Text(current is not null ? "正在进行" : next is not null ? "下一段" : "今天", 12, current is not null ? "#b91c1c" : "#1d4ed8", FontWeight.SemiBold));
         text.Children.Add(Text(target is null ? "今天没有排入日程" : target.Title, 28, "#111827", FontWeight.SemiBold));
         text.Children.Add(Text(target is null ? "可以从日程页新建，或直接去对话页让 AI 帮你安排。" : $"{target.Start}-{target.End}", 14, "#475569", FontWeight.SemiBold));
-        Grid.SetColumn(text, 0);
-        root.Children.Add(text);
 
         var actions = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Right,
+            HorizontalAlignment = compact ? HorizontalAlignment.Left : HorizontalAlignment.Right,
             VerticalAlignment = VerticalAlignment.Center,
             Spacing = 8
         };
-        actions.Children.Add(Button("打开日程", (_, _) =>
+        var schedule = Button(compact ? "日程" : "打开日程", (_, _) =>
         {
             _activePage = "Schedule";
             _state.Preferences.StartupPage = "Schedule";
             RenderActivePage();
-        }, secondary: true));
-        actions.Children.Add(Button("问 AI", (_, _) =>
+        }, secondary: true);
+        var chat = Button("问 AI", (_, _) =>
         {
             _activePage = "Chat";
             _state.Preferences.StartupPage = "Chat";
             RenderActivePage();
-        }));
-        Grid.SetColumn(actions, 1);
-        root.Children.Add(actions);
+        });
+        if (compact)
+        {
+            foreach (var button in new[] { schedule, chat })
+            {
+                button.Padding = new Thickness(10, 7);
+                button.MinHeight = 34;
+            }
+        }
+        actions.Children.Add(schedule);
+        actions.Children.Add(chat);
+
+        Control content;
+        if (compact)
+        {
+            var stack = new StackPanel { Spacing = 12 };
+            stack.Children.Add(text);
+            stack.Children.Add(actions);
+            content = stack;
+        }
+        else
+        {
+            var root = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            Grid.SetColumn(text, 0);
+            Grid.SetColumn(actions, 1);
+            root.Children.Add(text);
+            root.Children.Add(actions);
+            content = root;
+        }
 
         return new Border
         {
@@ -1682,7 +1714,7 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(18),
-            Child = root
+            Child = content
         };
     }
 
