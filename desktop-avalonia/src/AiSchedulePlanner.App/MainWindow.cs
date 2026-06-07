@@ -1187,19 +1187,37 @@ public sealed class MainWindow : Window
         var focusedCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == _focusDate);
         var today = DateOnly.FromDateTime(DateTime.Today);
         var todayCellPresent = dayCellControls.Any(control => control.Tag is DateOnly date && date == today);
+        var weekdayHeaders = visibleControls
+            .Where(control => Equals(control.Tag, "month-weekday-header"))
+            .ToList();
         var chips = visibleControls
             .Where(control => control.Tag is string tag && tag.StartsWith("month-chip:", StringComparison.OrdinalIgnoreCase))
             .ToList();
         var moreButtons = visibleControls
             .Where(control => control.Tag is string tag && tag.StartsWith("month-more:", StringComparison.OrdinalIgnoreCase))
             .ToList();
+        var minCellWidth = dayCellControls.Count == 0 ? 0 : dayCellControls.Min(control => control.Bounds.Width);
+        var maxCellWidth = dayCellControls.Count == 0 ? 0 : dayCellControls.Max(control => control.Bounds.Width);
+        var minCellHeight = dayCellControls.Count == 0 ? 0 : dayCellControls.Min(control => control.Bounds.Height);
+        var maxCellHeight = dayCellControls.Count == 0 ? 0 : dayCellControls.Max(control => control.Bounds.Height);
+        var compactMonth = ResolveScheduleCalendarViewportWidth() < 560;
+        var expectedVisibleBlockLimit = compactMonth ? 1 : dayCells >= 42 ? 2 : 3;
 
         return
         [
             $"month_grid_present: {monthGrid is not null}",
+            $"month_weekday_header_count: {weekdayHeaders.Count}",
             $"month_day_cell_count: {dayCells}",
             $"month_focused_cell_present: {focusedCellPresent}",
             $"month_today_cell_present: {todayCellPresent}",
+            $"month_min_day_cell_width: {minCellWidth:0.##}",
+            $"month_max_day_cell_width: {maxCellWidth:0.##}",
+            $"month_day_cell_width_consistent: {maxCellWidth - minCellWidth <= 1}",
+            $"month_min_day_cell_height: {minCellHeight:0.##}",
+            $"month_max_day_cell_height: {maxCellHeight:0.##}",
+            $"month_day_cell_height_consistent: {maxCellHeight - minCellHeight <= 1}",
+            $"month_compact_event_limit: {compactMonth}",
+            $"month_expected_visible_block_limit: {expectedVisibleBlockLimit}",
             $"month_event_chip_count: {chips.Count}",
             $"month_more_button_count: {moreButtons.Count}",
             $"month_min_chip_height: {(chips.Count == 0 ? 0 : chips.Min(control => control.Bounds.Height)):0.##}"
@@ -4748,7 +4766,8 @@ public sealed class MainWindow : Window
         var rowCount = Math.Max(5, dayCount / 7);
         visibleEnd = visibleStart.AddDays(rowCount * 7 - 1);
         dayCount = rowCount * 7;
-        var visibleBlockLimit = rowCount >= 6 ? 2 : 3;
+        var compact = ResolveScheduleCalendarViewportWidth() < 560;
+        var visibleBlockLimit = compact ? 1 : rowCount >= 6 ? 2 : 3;
         var schedules = BuildMonthSchedules(visibleStart, visibleEnd);
 
         var grid = new Grid
@@ -4766,6 +4785,7 @@ public sealed class MainWindow : Window
             label.VerticalAlignment = VerticalAlignment.Center;
             var header = new Border
             {
+                Tag = "month-weekday-header",
                 Background = Brush("#ffffff"),
                 BorderBrush = Brush("#dadce0"),
                 BorderThickness = new Thickness(column == 0 ? 0 : 1, 0, 0, 1),
