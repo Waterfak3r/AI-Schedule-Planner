@@ -225,7 +225,7 @@ public sealed class MainWindow : Window
             Background = Brush("#ffffff"),
             BorderBrush = Brush("#e5e7eb"),
             BorderThickness = new Thickness(0, 0, 0, 1),
-            Padding = new Thickness(22, 14),
+            Padding = new Thickness(20, 10),
             Child = BuildTopbar()
         };
         _topbarHost = topbar;
@@ -400,6 +400,8 @@ public sealed class MainWindow : Window
         _topbarActions = right;
         _undoButton = Button("撤销", (_, _) => UndoLastScheduleChange(), secondary: true);
         _undoButton.IsEnabled = false;
+        _undoButton.Padding = new Thickness(10, 6);
+        _undoButton.MinHeight = 32;
         right.Children.Add(_undoButton);
         Grid.SetColumn(_topbarTitle, 0);
         Grid.SetColumn(right, 1);
@@ -913,6 +915,8 @@ public sealed class MainWindow : Window
         report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
         report.AppendLine($"global_topbar_visible: {_topbarHost?.IsVisible == true}");
+        report.AppendLine($"global_topbar_height: {(_topbarHost?.Bounds.Height ?? 0):0.##}");
+        report.AppendLine($"global_topbar_compact_pass: {_topbarHost?.IsVisible != true || (_topbarHost?.Bounds.Height ?? 0) <= 48}");
         report.AppendLine($"global_undo_button_visible: {_undoButton?.IsVisible == true}");
         report.AppendLine($"large_page_title_count: {largePageTitleCount}");
         report.AppendLine($"visible_controls: {visibleControls.Count}");
