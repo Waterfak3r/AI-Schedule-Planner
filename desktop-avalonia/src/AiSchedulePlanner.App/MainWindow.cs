@@ -1610,8 +1610,15 @@ public sealed class MainWindow : Window
     {
         if (_activePage != "Chat") return [];
 
+        var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-work-area"));
         var messagePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-message-panel"));
         var sidePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-side-panel"));
+        var messagePoint = messagePanel?.TranslatePoint(new Point(0, 0), this);
+        var sidePoint = sidePanel?.TranslatePoint(new Point(0, 0), this);
+        var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
+        var stacked = messagePoint is not null &&
+            sidePoint is not null &&
+            sidePoint.Value.Y > messagePoint.Value.Y + Math.Min(messagePanel?.Bounds.Height ?? 0, 120);
         var warningTexts = visibleTexts
             .Where(IsAiWarningPreviewText)
             .Distinct()
@@ -1629,9 +1636,13 @@ public sealed class MainWindow : Window
             $"chat_preview_warning_actions: {CountWarningActions(aggregatePreview)}",
             $"chat_warning_texts_visible: {warningTexts.Count}",
             $"chat_warning_texts: {string.Join(" | ", warningTexts)}",
+            $"chat_work_area_width: {(workArea?.Bounds.Width ?? 0):0.##}",
+            $"chat_compact_expected: {compactExpected}",
+            $"chat_columns_stacked: {stacked}",
+            $"chat_columns_stack_pass: {stacked == compactExpected}",
             $"chat_message_panel_width: {(messagePanel?.Bounds.Width ?? 0):0.##}",
             $"chat_side_panel_width: {(sidePanel?.Bounds.Width ?? 0):0.##}",
-            $"chat_message_panel_min_width_pass: {(messagePanel?.Bounds.Width ?? 0) >= 320}",
+            $"chat_message_panel_min_width_pass: {(messagePanel?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 320)}",
             $"chat_apply_button: {applyButton}"
         ];
     }
@@ -2507,7 +2518,6 @@ public sealed class MainWindow : Window
     {
         var contentWidth = ResolveMainContentViewportWidth();
         var compact = contentWidth < 760;
-        var sideWidth = compact ? 280 : 340;
         var root = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,*,Auto"),
@@ -2516,13 +2526,6 @@ public sealed class MainWindow : Window
         var topStrip = RenderChatTopStrip(compact);
         Grid.SetRow(topStrip, 0);
         root.Children.Add(topStrip);
-
-        var workArea = new Grid
-        {
-            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
-            ColumnSpacing = compact ? 12 : 14,
-            Tag = "chat-work-area"
-        };
 
         var messages = new StackPanel { Spacing = 10 };
         foreach (var message in _chatMessages)
@@ -2546,16 +2549,45 @@ public sealed class MainWindow : Window
             Padding = new Thickness(14),
             Child = scroller
         };
-        Grid.SetColumn(messagePanel, 0);
-        workArea.Children.Add(messagePanel);
 
         var sidePanel = _pendingActions.Count > 0 ? BuildActionPreview() : RenderChatContextPanel();
         sidePanel.Tag = "chat-side-panel";
-        Grid.SetColumn(sidePanel, 1);
-        workArea.Children.Add(sidePanel);
 
-        Grid.SetRow(workArea, 1);
-        root.Children.Add(workArea);
+        Control workAreaHost;
+        if (compact)
+        {
+            messagePanel.MinHeight = _pendingActions.Count > 0 ? 190 : 300;
+            var stack = new StackPanel
+            {
+                Spacing = 12,
+                Tag = "chat-work-area"
+            };
+            stack.Children.Add(messagePanel);
+            stack.Children.Add(sidePanel);
+            workAreaHost = new ScrollViewer
+            {
+                Content = stack,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+        }
+        else
+        {
+            var workArea = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("*,340"),
+                ColumnSpacing = 14,
+                Tag = "chat-work-area"
+            };
+            Grid.SetColumn(messagePanel, 0);
+            Grid.SetColumn(sidePanel, 1);
+            workArea.Children.Add(messagePanel);
+            workArea.Children.Add(sidePanel);
+            workAreaHost = workArea;
+        }
+
+        Grid.SetRow(workAreaHost, 1);
+        root.Children.Add(workAreaHost);
 
         var input = new TextBox
         {
