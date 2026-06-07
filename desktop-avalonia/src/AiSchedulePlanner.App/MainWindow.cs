@@ -312,8 +312,13 @@ public sealed class MainWindow : Window
 
     private double ResolveScheduleCalendarViewportWidth()
     {
-        var schedulePanelWidth = _state.Preferences.SchedulePanelCollapsed ? 0d : 256d;
-        return Math.Max(260, ResolveMainContentViewportWidth() - schedulePanelWidth - 4);
+        return Math.Max(260, ResolveMainContentViewportWidth() - ResolveSchedulePanelFootprintWidth() - 4);
+    }
+
+    private double ResolveSchedulePanelFootprintWidth()
+    {
+        if (_state.Preferences.SchedulePanelCollapsed) return 0;
+        return ResolveMainContentViewportWidth() < 760 ? 232d : 256d;
     }
 
     private double ResolveMainContentViewportWidth()
@@ -1013,6 +1018,7 @@ public sealed class MainWindow : Window
         var top = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-top"));
         var toolbar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-toolbar"));
         var calendar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-calendar"));
+        var leftPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-left-panel"));
         var topHeight = MeasureVerticalDistance(main, calendar);
         if (double.IsNaN(topHeight) && top is not null)
         {
@@ -1039,6 +1045,7 @@ public sealed class MainWindow : Window
         return
         [
             $"schedule_global_topbar_visible: {_topbarHost?.IsVisible == true}",
+            $"schedule_left_panel_width: {(leftPanel?.Bounds.Width ?? 0):0.##}",
             $"schedule_toolbar_present: {toolbar is not null}",
             $"schedule_toolbar_height: {(toolbar?.Bounds.Height ?? 0):0.##}",
             $"schedule_top_stack_height: {(top?.Bounds.Height ?? 0):0.##}",
@@ -2846,11 +2853,14 @@ public sealed class MainWindow : Window
     private Control RenderSchedule()
     {
         var panelCollapsed = _state.Preferences.SchedulePanelCollapsed;
+        var compact = ResolveMainContentViewportWidth() < 760;
+        var panelWidth = compact ? 220 : 240;
+        var panelSpacing = compact ? 12 : 16;
         var issues = GetScheduleIssuesForDisplay();
         var root = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions(panelCollapsed ? "0,*" : "240,*"),
-            ColumnSpacing = panelCollapsed ? 0 : 16
+            ColumnDefinitions = new ColumnDefinitions(panelCollapsed ? "0,*" : $"{panelWidth},*"),
+            ColumnSpacing = panelCollapsed ? 0 : panelSpacing
         };
 
         if (!panelCollapsed)
@@ -2868,6 +2878,7 @@ public sealed class MainWindow : Window
             }
             var leftScroller = new ScrollViewer
             {
+                Tag = "schedule-left-panel",
                 Content = leftRail,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
