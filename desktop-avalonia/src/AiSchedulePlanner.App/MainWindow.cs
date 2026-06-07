@@ -861,6 +861,17 @@ public sealed class MainWindow : Window
             report.AppendLine($"zero_sized_types: {string.Join(", ", zeroSizedTypes)}");
         }
         report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
+        if (_sidebarCollapsed)
+        {
+            var collapsedNavLabels = _navButtons
+                .Select(item => ControlText(item.Value.Content))
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .Select(text => text.ReplaceLineEndings(" ").Trim())
+                .ToList();
+            var collapsedNavFixedHeight = _navButtons.Values.All(button => Math.Abs(button.Bounds.Height - 44) <= 0.5);
+            report.AppendLine($"collapsed_nav_labels: {string.Join(" | ", collapsedNavLabels)}");
+            report.AppendLine($"collapsed_nav_fixed_height: {collapsedNavFixedHeight}");
+        }
         report.AppendLine($"has_exact_save_button: {hasExactSaveButton}");
         report.AppendLine($"has_schedule_reminder_button: {hasScheduleReminderButton}");
         report.AppendLine($"has_calendar_toggle: {hasCalendarToggle}");
@@ -1516,9 +1527,9 @@ public sealed class MainWindow : Window
         {
             var active = page == _activePage;
             var fullLabel = _navFullLabels.GetValueOrDefault(page, button.Content?.ToString() ?? page);
+            var collapsedLabel = CollapsedNavLabel(page, fullLabel);
 
-            var collapsedLabelUnits = BuildCollapsedNavLabelUnits(fullLabel);
-            button.Content = _sidebarCollapsed ? BuildCollapsedNavLabel(collapsedLabelUnits, active) : fullLabel;
+            button.Content = _sidebarCollapsed ? BuildCollapsedNavLabel(collapsedLabel, active) : fullLabel;
             button.Background = Brush(active ? "#26314c" : "#00ffffff");
             button.Foreground = Brush(active ? "#ffffff" : "#cbd5e1");
             button.BorderBrush = Brush(active ? "#38bdf8" : "#00ffffff");
@@ -1526,8 +1537,9 @@ public sealed class MainWindow : Window
             button.Margin = _sidebarCollapsed
                 ? new Thickness(0, 0, 0, 8)
                 : new Thickness(active ? 10 : 0, 0, active ? 0 : 10, 4);
-            button.Padding = _sidebarCollapsed ? new Thickness(0, 7) : new Thickness(active ? 14 : 12, 8, 12, 8);
-            button.MinHeight = _sidebarCollapsed ? CollapsedNavButtonHeight(collapsedLabelUnits.Count) : 0;
+            button.Padding = _sidebarCollapsed ? new Thickness(0) : new Thickness(active ? 14 : 12, 8, 12, 8);
+            button.MinHeight = _sidebarCollapsed ? 44 : 0;
+            button.Height = _sidebarCollapsed ? 44 : double.NaN;
             button.Width = _sidebarCollapsed ? 48 : double.NaN;
             button.HorizontalAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Stretch;
             button.HorizontalContentAlignment = _sidebarCollapsed ? HorizontalAlignment.Center : HorizontalAlignment.Left;
@@ -1536,67 +1548,28 @@ public sealed class MainWindow : Window
         }
     }
 
-    private static Control BuildCollapsedNavLabel(IReadOnlyList<string> units, bool active)
+    private static TextBlock BuildCollapsedNavLabel(string label, bool active)
     {
-        var stack = new StackPanel
+        return new TextBlock
         {
-            Spacing = 1,
+            Text = label,
+            FontSize = label.Length > 2 ? 11 : 12,
+            LineHeight = 14,
+            FontWeight = FontWeight.SemiBold,
+            Foreground = Brush(active ? "#ffffff" : "#cbd5e1"),
+            TextAlignment = TextAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
-            VerticalAlignment = VerticalAlignment.Center
+            VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.NoWrap
         };
-
-        foreach (var unit in units)
-        {
-            stack.Children.Add(new TextBlock
-            {
-                Text = unit,
-                FontSize = unit.Length > 1 ? 11 : 12,
-                LineHeight = 13.5,
-                FontWeight = FontWeight.SemiBold,
-                Foreground = Brush(active ? "#ffffff" : "#cbd5e1"),
-                TextAlignment = TextAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextWrapping = TextWrapping.NoWrap
-            });
-        }
-
-        return stack;
     }
 
-    private static IReadOnlyList<string> BuildCollapsedNavLabelUnits(string label)
+    private static string CollapsedNavLabel(string page, string fullLabel)
     {
-        var units = new List<string>();
-        var asciiRun = new StringBuilder();
-
-        foreach (var ch in label)
-        {
-            if (char.IsWhiteSpace(ch)) continue;
-
-            if (ch <= 127 && char.IsLetterOrDigit(ch))
-            {
-                asciiRun.Append(ch);
-                continue;
-            }
-
-            if (asciiRun.Length > 0)
-            {
-                units.Add(asciiRun.ToString());
-                asciiRun.Clear();
-            }
-
-            units.Add(ch.ToString());
-        }
-
-        if (asciiRun.Length > 0)
-        {
-            units.Add(asciiRun.ToString());
-        }
-
-        return units.Count > 0 ? units : [label];
+        if (page == "Ai") return "AI";
+        var compact = fullLabel.Replace(" ", "", StringComparison.Ordinal);
+        return compact.Length <= 2 ? compact : compact[..2];
     }
-
-    private static double CollapsedNavButtonHeight(int unitCount) => Math.Max(52, unitCount * 13.5 + 16);
 
     private Control RenderOverview()
     {
