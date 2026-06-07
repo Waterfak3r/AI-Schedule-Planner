@@ -896,6 +896,12 @@ public sealed class MainWindow : Window
         var hasCalendarToggle = buttonLabels.Contains("收起日历") ||
             buttonLabels.Contains("展开日历") ||
             visibleControls.Any(control => Equals(control.Tag, "schedule-calendar-toggle"));
+        var pageTitle = PageTitle(_activePage);
+        var largePageTitleCount = string.IsNullOrWhiteSpace(pageTitle)
+            ? 0
+            : visibleControls
+                .OfType<TextBlock>()
+                .Count(text => text.FontSize >= 18 && string.Equals(text.Text, pageTitle, StringComparison.Ordinal));
         var report = new StringBuilder();
 
         report.AppendLine("AI 日程助手 internal UI audit");
@@ -908,6 +914,7 @@ public sealed class MainWindow : Window
         report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
         report.AppendLine($"global_topbar_visible: {_topbarHost?.IsVisible == true}");
         report.AppendLine($"global_undo_button_visible: {_undoButton?.IsVisible == true}");
+        report.AppendLine($"large_page_title_count: {largePageTitleCount}");
         report.AppendLine($"visible_controls: {visibleControls.Count}");
         report.AppendLine($"zero_sized_visible_controls: {zeroSized}");
         if (zeroSized > 0)
@@ -1680,17 +1687,7 @@ public sealed class MainWindow : Window
             _contentHost.Padding = schedulePage ? new Thickness(16, 12, 16, 16) : new Thickness(24);
         }
 
-        _topbarTitle.Text = _activePage switch
-        {
-            "Overview" => "总览",
-            "Chat" => "对话",
-            "Schedule" => "日程",
-            "Rules" => "规则",
-            "Ai" => "AI 设置",
-            "Community" => "社区",
-            "Advanced" => "高级",
-            _ => "AI 日程助手"
-        };
+        _topbarTitle.Text = PageTitle(_activePage);
 
         _content.Content = _activePage switch
         {
@@ -1702,6 +1699,21 @@ public sealed class MainWindow : Window
             "Community" => RenderCommunity(),
             "Advanced" => RenderAdvanced(),
             _ => RenderChat()
+        };
+    }
+
+    private static string PageTitle(string page)
+    {
+        return page switch
+        {
+            "Overview" => "总览",
+            "Chat" => "对话",
+            "Schedule" => "日程",
+            "Rules" => "规则",
+            "Ai" => "AI 设置",
+            "Community" => "社区",
+            "Advanced" => "高级",
+            _ => "AI 日程助手"
         };
     }
 
@@ -6220,7 +6232,6 @@ public sealed class MainWindow : Window
         var contentWidth = ResolveMainContentViewportWidth();
         var compact = contentWidth < 760;
         var root = PageStack();
-        root.Children.Add(Header("规则", "管理自动排程的基础模板。固定事项优先占用时间，重复任务会按规则填入空档。"));
         root.Children.Add(RenderRulesSummary());
         root.Children.Add(RenderRulesFilter());
 
@@ -6956,7 +6967,6 @@ public sealed class MainWindow : Window
         var compact = contentWidth < 760;
         var sideWidth = compact ? 280 : 330;
         var root = PageStack();
-        root.Children.Add(Header("AI 设置", "配置对话模型、请求头和回复风格。密钥只保存在本机用户数据目录。"));
 
         var baseUrl = Input("Base URL", string.IsNullOrWhiteSpace(_aiSettings.BaseUrl) ? "https://api.openai.com/v1" : _aiSettings.BaseUrl);
         var model = Input("Model", string.IsNullOrWhiteSpace(_aiSettings.Model) ? "gpt-4.1-mini" : _aiSettings.Model);
@@ -7330,7 +7340,6 @@ public sealed class MainWindow : Window
     private Control RenderCommunity()
     {
         var root = PageStack();
-        root.Children.Add(Header("社区", "保存提醒、经验和可复用的日程想法。"));
         root.Children.Add(RenderCommunitySummary());
 
         var input = new TextBox
@@ -7456,7 +7465,6 @@ public sealed class MainWindow : Window
         var compact = contentWidth < 760;
         var sideWidth = compact ? 280 : 330;
         var root = PageStack();
-        root.Children.Add(Header("高级", "管理日程生成偏好和本地数据。"));
 
         var columns = new Grid
         {
