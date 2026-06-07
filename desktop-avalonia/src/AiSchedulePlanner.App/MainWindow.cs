@@ -3253,7 +3253,7 @@ public sealed class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center
         };
         nav.Children.Add(CompactToolbarButton("今天", (_, _) => GoToToday(), "今天"));
-        var calendarToggle = CompactToolbarButton("☰", (_, _) => ToggleSchedulePanel(), _state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历");
+        var calendarToggle = CompactToolbarButton("日历", (_, _) => ToggleSchedulePanel(), _state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历");
         calendarToggle.Tag = "schedule-calendar-toggle";
         nav.Children.Add(calendarToggle);
         nav.Children.Add(BuildScheduleNavGroup(compact: true));
