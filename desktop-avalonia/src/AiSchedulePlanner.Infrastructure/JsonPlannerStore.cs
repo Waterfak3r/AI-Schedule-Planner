@@ -14,6 +14,8 @@ public sealed class JsonPlannerStore : IPlannerStore
 
     private readonly string _statePath;
     private readonly string _aiSettingsPath;
+    private readonly SemaphoreSlim _stateSaveLock = new(1, 1);
+    private readonly SemaphoreSlim _aiSettingsSaveLock = new(1, 1);
 
     public JsonPlannerStore(string? dataDirectory = null)
     {
@@ -41,14 +43,17 @@ public sealed class JsonPlannerStore : IPlannerStore
 
     public async Task SaveStateAsync(PlannerState state, CancellationToken cancellationToken = default)
     {
-        EnsureDataDirectory(cancellationToken);
-        var tempPath = $"{_statePath}.tmp";
-        await using (var stream = File.Create(tempPath))
+        var snapshot = Normalize(state.Clone());
+        await _stateSaveLock.WaitAsync(cancellationToken);
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, Normalize(state), JsonOptions, cancellationToken);
+            EnsureDataDirectory(cancellationToken);
+            await SaveJsonAtomicallyAsync(_statePath, snapshot, cancellationToken);
         }
-
-        File.Move(tempPath, _statePath, overwrite: true);
+        finally
+        {
+            _stateSaveLock.Release();
+        }
     }
 
     public async Task<AiSettings> LoadAiSettingsAsync(CancellationToken cancellationToken = default)
@@ -67,14 +72,52 @@ public sealed class JsonPlannerStore : IPlannerStore
 
     public async Task SaveAiSettingsAsync(AiSettings settings, CancellationToken cancellationToken = default)
     {
-        EnsureDataDirectory(cancellationToken);
-        var tempPath = $"{_aiSettingsPath}.tmp";
-        await using (var stream = File.Create(tempPath))
+        var snapshot = CloneAiSettings(settings);
+        await _aiSettingsSaveLock.WaitAsync(cancellationToken);
+        try
         {
-            await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken);
+            EnsureDataDirectory(cancellationToken);
+            await SaveJsonAtomicallyAsync(_aiSettingsPath, snapshot, cancellationToken);
         }
+        finally
+        {
+            _aiSettingsSaveLock.Release();
+        }
+    }
 
-        File.Move(tempPath, _aiSettingsPath, overwrite: true);
+    private static async Task SaveJsonAtomicallyAsync<T>(string path, T value, CancellationToken cancellationToken)
+    {
+        var tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        try
+        {
+            await using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await JsonSerializer.SerializeAsync(stream, value, JsonOptions, cancellationToken);
+            }
+
+            File.Move(tempPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
+    }
+
+    private static AiSettings CloneAiSettings(AiSettings settings)
+    {
+        return new AiSettings
+        {
+            BaseUrl = settings.BaseUrl,
+            Model = settings.Model,
+            ChatPath = settings.ChatPath,
+            ApiKey = settings.ApiKey,
+            ApiKeyHeader = settings.ApiKeyHeader,
+            ApiKeyPrefix = settings.ApiKeyPrefix,
+            StylePrompt = settings.StylePrompt
+        };
     }
 
     public static string GetDefaultDataDirectory()

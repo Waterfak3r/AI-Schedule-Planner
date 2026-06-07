@@ -129,4 +129,55 @@ public sealed class JsonPlannerStoreTests
             if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task Store_handles_parallel_saves_without_temp_file_collisions()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"asp-avalonia-test-{Guid.NewGuid():N}");
+        var store = new JsonPlannerStore(dir);
+        try
+        {
+            var states = Enumerable.Range(0, 12)
+                .Select(index =>
+                {
+                    var state = PlannerDefaults.Create();
+                    state.Preferences.WakeTime = $"08:{index:00}";
+                    state.Completed[$"task_{index}"] = true;
+                    state.Tasks.Add(new TaskRule
+                    {
+                        Id = $"task_{index}",
+                        Title = $"任务 {index}",
+                        DurationMin = 20 + index,
+                        DaysOfWeek = [1, 3, 5]
+                    });
+                    return state;
+                })
+                .ToList();
+
+            var settings = Enumerable.Range(0, 12)
+                .Select(index => new AiSettings
+                {
+                    BaseUrl = $"https://example{index}.test/v1",
+                    Model = $"model-{index}",
+                    ApiKey = $"key-{index}"
+                })
+                .ToList();
+
+            await Task.WhenAll(states.Select(state => store.SaveStateAsync(state))
+                .Concat(settings.Select(setting => store.SaveAiSettingsAsync(setting))));
+
+            var loadedState = await store.LoadStateAsync();
+            var loadedSettings = await store.LoadAiSettingsAsync();
+
+            Assert.Contains(loadedState.Preferences.WakeTime, states.Select(state => state.Preferences.WakeTime));
+            Assert.Contains(loadedSettings.Model, settings.Select(setting => setting.Model));
+            Assert.Empty(Directory.GetFiles(dir, "*.tmp"));
+            Assert.True(File.Exists(Path.Combine(dir, "planner-state.v1.json")));
+            Assert.True(File.Exists(Path.Combine(dir, "ai-settings.local.json")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
 }

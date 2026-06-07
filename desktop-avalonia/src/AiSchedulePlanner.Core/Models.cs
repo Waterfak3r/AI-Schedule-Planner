@@ -183,6 +183,47 @@ public sealed class CommunityPost
 
 public static class ModelCloning
 {
+    public static PlannerState Clone(this PlannerState state)
+    {
+        return new PlannerState
+        {
+            Preferences = state.Preferences.Clone(),
+            FixedEvents = state.FixedEvents.Select(item => item.Clone()).ToList(),
+            Tasks = state.Tasks.Select(task => task.Clone()).ToList(),
+            Completed = new Dictionary<string, bool>(state.Completed),
+            DayOverrides = state.DayOverrides.ToDictionary(item => item.Key, item => item.Value.Clone()),
+            CommunityPosts = state.CommunityPosts.Select(item => item.Clone()).ToList()
+        };
+    }
+
+    public static PlannerPreferences Clone(this PlannerPreferences preferences)
+    {
+        return new PlannerPreferences
+        {
+            WakeTime = preferences.WakeTime,
+            Bedtime = preferences.Bedtime,
+            Tone = preferences.Tone,
+            StartupPage = preferences.StartupPage,
+            ScheduleView = preferences.ScheduleView,
+            SidebarCollapsed = preferences.SidebarCollapsed,
+            SchedulePanelCollapsed = preferences.SchedulePanelCollapsed
+        };
+    }
+
+    public static FixedEventRule Clone(this FixedEventRule fixedEvent)
+    {
+        return new FixedEventRule
+        {
+            Id = fixedEvent.Id,
+            Title = fixedEvent.Title,
+            Start = fixedEvent.Start,
+            End = fixedEvent.End,
+            BufferMin = fixedEvent.BufferMin,
+            DaysOfWeek = [.. fixedEvent.DaysOfWeek],
+            AssignedDates = [.. fixedEvent.AssignedDates]
+        };
+    }
+
     public static TaskRule Clone(this TaskRule task)
     {
         return new TaskRule
@@ -196,6 +237,17 @@ public static class ModelCloning
             SplitAllowed = task.SplitAllowed,
             DaysOfWeek = [.. task.DaysOfWeek],
             WeeklyTargetCount = task.WeeklyTargetCount
+        };
+    }
+
+    public static CommunityPost Clone(this CommunityPost post)
+    {
+        return new CommunityPost
+        {
+            Id = post.Id,
+            Text = post.Text,
+            Likes = post.Likes,
+            CreatedAt = post.CreatedAt
         };
     }
 }
