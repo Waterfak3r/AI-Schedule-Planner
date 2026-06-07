@@ -505,6 +505,9 @@ public sealed class MainWindow : Window
             case "ai-settings":
                 ApplyPageReviewScenario("Ai");
                 break;
+            case "rules":
+                ApplyPageReviewScenario("Rules");
+                break;
         }
     }
 
@@ -934,8 +937,33 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildRulesAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildRulesAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Rules") return [];
+
+        var fixedPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "rules-fixed-panel"));
+        var taskPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "rules-task-panel"));
+        var fixedPoint = fixedPanel?.TranslatePoint(new Point(0, 0), this);
+        var taskPoint = taskPanel?.TranslatePoint(new Point(0, 0), this);
+        var stacked = fixedPoint is not null &&
+            taskPoint is not null &&
+            taskPoint.Value.Y > fixedPoint.Value.Y + Math.Min(fixedPanel?.Bounds.Height ?? 0, 120);
+
+        return
+        [
+            $"rules_fixed_panel_width: {(fixedPanel?.Bounds.Width ?? 0):0.##}",
+            $"rules_task_panel_width: {(taskPanel?.Bounds.Width ?? 0):0.##}",
+            $"rules_panels_stacked: {stacked}",
+            $"rules_task_panel_min_width_pass: {(taskPanel?.Bounds.Width ?? 0) >= 420}"
+        ];
     }
 
     private IReadOnlyList<string> BuildAiSettingsAuditRows(IReadOnlyList<Control> visibleControls)
@@ -6080,17 +6108,36 @@ public sealed class MainWindow : Window
 
     private Control RenderRules()
     {
+        var contentWidth = ResolveMainContentViewportWidth();
+        var compact = contentWidth < 760;
         var root = PageStack();
         root.Children.Add(Header("规则", "管理自动排程的基础模板。固定事项优先占用时间，重复任务会按规则填入空档。"));
         root.Children.Add(RenderRulesSummary());
         root.Children.Add(RenderRulesFilter());
+
+        var fixedPanel = RenderFixedRulesPanel();
+        fixedPanel.Tag = "rules-fixed-panel";
+        var taskPanel = RenderTaskRulesPanel();
+        taskPanel.Tag = "rules-task-panel";
+        if (compact)
+        {
+            var stack = new StackPanel
+            {
+                Spacing = 14,
+                Tag = "rules-work-area"
+            };
+            stack.Children.Add(fixedPanel);
+            stack.Children.Add(taskPanel);
+            root.Children.Add(stack);
+            return Scroll(root);
+        }
+
         var columns = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
-            ColumnSpacing = 16
+            ColumnSpacing = 16,
+            Tag = "rules-work-area"
         };
-        var fixedPanel = RenderFixedRulesPanel();
-        var taskPanel = RenderTaskRulesPanel();
         Grid.SetColumn(fixedPanel, 0);
         Grid.SetColumn(taskPanel, 1);
         columns.Children.Add(fixedPanel);
