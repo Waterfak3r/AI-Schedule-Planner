@@ -576,6 +576,9 @@ public sealed class MainWindow : Window
             case "schedule-day":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
                 break;
+            case "schedule-day-dense":
+                ApplyDenseDayScheduleReviewScenario();
+                break;
             case "schedule-selected":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: true, markComplete: false);
                 break;
@@ -827,6 +830,41 @@ public sealed class MainWindow : Window
             _selectedRuntimeIds.Clear();
         }
 
+        RenderActivePage();
+    }
+
+    private void ApplyDenseDayScheduleReviewScenario()
+    {
+        _activePage = "Schedule";
+        _scheduleView = ScheduleViewMode.Day;
+        _focusDate = new DateOnly(2026, 6, 7);
+        _state.Preferences.SchedulePanelCollapsed = false;
+        _schedulePanelPinnedOpenForNarrow = true;
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+
+        var schedule = new DaySchedule
+        {
+            Date = _focusDate,
+            Blocks =
+            [
+                new ScheduleBlock { RuntimeId = "dense-short-1", Type = ScheduleBlockType.Task, Title = "口语练习", Category = "study", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-2", Type = ScheduleBlockType.Task, Title = "读论文", Category = "study", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-3", Type = ScheduleBlockType.Task, Title = "回邮件", Category = "other", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-4", Type = ScheduleBlockType.Task, Title = "背单词", Category = "study", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-5", Type = ScheduleBlockType.Fixed, Title = "短会", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-6", Type = ScheduleBlockType.Task, Title = "整理包", Category = "other", StartMin = 9 * 60, EndMin = 9 * 60 + 30, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-short-7", Type = ScheduleBlockType.Task, Title = "喝水休息", Category = "workout", StartMin = 10 * 60, EndMin = 10 * 60 + 15, Editable = true },
+                new ScheduleBlock { RuntimeId = "dense-long-1", Type = ScheduleBlockType.Task, Title = "深度写作", Category = "code", StartMin = 14 * 60, EndMin = 16 * 60, Editable = true }
+            ]
+        };
+        schedule.Summary = BuildSummaryForReview(schedule);
+        StoreDayOverride(schedule);
+        RebuildSchedules();
+        _selectedRuntimeIds.Add("dense-short-1");
         RenderActivePage();
     }
 
@@ -1389,6 +1427,55 @@ public sealed class MainWindow : Window
             .Where(IsScheduleLeftPanelExplanatoryText)
             .Distinct()
             .ToList();
+        var visibleBlockIds = _daySchedule.Blocks
+            .Where(IsVisibleBlock)
+            .Select(block => block.RuntimeId)
+            .ToHashSet(StringComparer.Ordinal);
+        var dayEventControls = _scheduleView == ScheduleViewMode.Day
+            ? visibleControls
+                .OfType<Border>()
+                .Where(control => control.Tag is string id && visibleBlockIds.Contains(id))
+                .ToList()
+            : new List<Border>();
+        var dayEventLabels = _scheduleView == ScheduleViewMode.Day
+            ? visibleControls
+                .OfType<TextBlock>()
+                .Where(control => control.Tag is string tag && tag.StartsWith("day-event-label:", StringComparison.OrdinalIgnoreCase))
+                .ToList()
+            : new List<TextBlock>();
+        var dayCompactLabels = dayEventLabels
+            .Where(control => control.Tag is string tag && tag.EndsWith(":compact", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        string DayLabelRuntimeId(TextBlock label)
+        {
+            var tag = label.Tag as string ?? "";
+            var parts = tag.Split(':');
+            return parts.Length >= 3 ? parts[1] : "";
+        }
+
+        var dayEventLabelInnerOverflowCount = dayEventLabels.Count(label =>
+        {
+            var runtimeId = DayLabelRuntimeId(label);
+            var owner = label.GetVisualAncestors()
+                .OfType<Border>()
+                .FirstOrDefault(border => Equals(border.Tag, runtimeId));
+            var point = owner is null ? null : label.TranslatePoint(new Point(0, 0), owner);
+            if (owner is null || point is null) return true;
+
+            return point.Value.X < -1 ||
+                point.Value.Y < -1 ||
+                point.Value.X + label.Bounds.Width > owner.Bounds.Width + 1 ||
+                point.Value.Y + label.Bounds.Height > owner.Bounds.Height + 1;
+        });
+        var dayCompactLabelLineHeightCount = dayCompactLabels.Count(label => !double.IsNaN(label.LineHeight) && label.LineHeight > 0);
+        var dayCanvasWidth = _dayCanvas?.Bounds.Width ?? 0;
+        var dayCanvasHeight = _dayCanvas?.Bounds.Height ?? 0;
+        var dayEventMaxRight = dayEventControls.Count == 0 ? 0 : dayEventControls.Max(control => CanvasLeft(control) + control.Bounds.Width);
+        var dayEventMaxBottom = dayEventControls.Count == 0 ? 0 : dayEventControls.Max(control => CanvasTop(control) + control.Bounds.Height);
+        var dayEventClippedCount = dayEventControls.Count(control => CanvasLeft(control) < -1 || CanvasLeft(control) + control.Bounds.Width > dayCanvasWidth + 1);
+        var dayEventVerticalClippedCount = dayEventControls.Count(control => CanvasTop(control) < -1 || CanvasTop(control) + control.Bounds.Height > dayCanvasHeight + 1);
+        var dayEventTextWrapCount = dayEventLabels.Count(label => label.TextWrapping != TextWrapping.NoWrap);
+        var dayCompactLabelNewlineCount = dayCompactLabels.Count(label => (label.Text ?? "").Contains('\n'));
 
         return
         [
@@ -1419,7 +1506,27 @@ public sealed class MainWindow : Window
             $"schedule_rule_version: {_state.RuleVersion}",
             $"schedule_day_override_rule_version: {(_state.DayOverrideRuleVersions.TryGetValue(DateKey(_focusDate), out var overrideVersion) ? overrideVersion.ToString() : "")}",
             $"schedule_left_panel_explanatory_text_visible: {explanatoryTexts.Count > 0}",
-            $"schedule_left_panel_explanatory_texts: {string.Join(" | ", explanatoryTexts)}"
+            $"schedule_left_panel_explanatory_texts: {string.Join(" | ", explanatoryTexts)}",
+            $"day_event_count: {dayEventControls.Count}",
+            $"day_event_label_count: {dayEventLabels.Count}",
+            $"day_event_compact_label_count: {dayCompactLabels.Count}",
+            $"day_event_text_wrap_count: {dayEventTextWrapCount}",
+            $"day_event_compact_label_newline_count: {dayCompactLabelNewlineCount}",
+            $"day_event_label_inner_overflow_count: {dayEventLabelInnerOverflowCount}",
+            $"day_event_label_min_width: {(dayEventLabels.Count == 0 ? 0 : dayEventLabels.Min(label => label.Bounds.Width)):0.##}",
+            $"day_event_label_min_height: {(dayEventLabels.Count == 0 ? 0 : dayEventLabels.Min(label => label.Bounds.Height)):0.##}",
+            $"day_event_label_bounds_pass: {_scheduleView != ScheduleViewMode.Day || dayEventLabelInnerOverflowCount == 0}",
+            $"day_event_compact_label_lineheight_set_count: {dayCompactLabelLineHeightCount}",
+            $"day_event_compact_label_lineheight_pass: {_scheduleView != ScheduleViewMode.Day || dayCompactLabels.Count == dayCompactLabelLineHeightCount}",
+            $"day_event_compact_label_pass: {_scheduleView != ScheduleViewMode.Day || (dayEventLabels.All(label => label.TextWrapping == TextWrapping.NoWrap) && dayCompactLabels.All(label => !(label.Text ?? "").Contains('\n')) && dayEventLabelInnerOverflowCount == 0)}",
+            $"day_canvas_width: {dayCanvasWidth:0.##}",
+            $"day_canvas_height: {dayCanvasHeight:0.##}",
+            $"day_event_max_right: {dayEventMaxRight:0.##}",
+            $"day_event_max_bottom: {dayEventMaxBottom:0.##}",
+            $"day_event_clipped_count: {dayEventClippedCount}",
+            $"day_event_vertical_clipped_count: {dayEventVerticalClippedCount}",
+            $"day_event_horizontal_bounds_pass: {_scheduleView != ScheduleViewMode.Day || dayEventClippedCount == 0}",
+            $"day_event_vertical_bounds_pass: {_scheduleView != ScheduleViewMode.Day || dayEventVerticalClippedCount == 0}"
         ];
     }
 
@@ -4894,8 +5001,9 @@ public sealed class MainWindow : Window
         var current = IsCurrentBlock(block);
         var eventWidth = DayEventWidthForLayout(layout);
         var ultraNarrow = eventWidth < 96;
-        var compact = block.DurationMin * pixelsPerMinute < 44 || eventWidth < 132;
-        var showCompleteButton = completable && !ultraNarrow;
+        var shortEvent = block.DurationMin * pixelsPerMinute < 38;
+        var compact = shortEvent || eventWidth < 132;
+        var showCompleteButton = completable && !ultraNarrow && !compact;
         var accent = done ? "#9aa0a6" : MonthEventAccent(block);
         var selected = _selectedRuntimeIds.Contains(block.RuntimeId);
         var border = new Border
@@ -4909,6 +5017,7 @@ public sealed class MainWindow : Window
             Width = eventWidth,
             Opacity = done ? 0.68 : 1,
             Height = Math.Max(32, block.DurationMin * pixelsPerMinute - 4),
+            ClipToBounds = true,
             Child = new Grid
             {
                 RowDefinitions = new RowDefinitions("*,6")
@@ -4945,16 +5054,35 @@ public sealed class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Center
         };
         completeButton.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
-        var textStack = new StackPanel { Spacing = compact ? 0 : 2 };
-        var timeLabel = Text($"{block.Start}-{block.End}", compact ? 10 : 11, done ? "#64748b" : "#334155", FontWeight.SemiBold);
-        timeLabel.TextWrapping = TextWrapping.NoWrap;
-        timeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
-        textStack.Children.Add(timeLabel);
         var titleSuffix = done ? "（已完成）" : current ? "（进行中）" : "";
-        var titleLabel = Text($"{block.Title}{titleSuffix}", compact ? 12 : 13, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
-        titleLabel.TextWrapping = TextWrapping.NoWrap;
-        titleLabel.TextTrimming = TextTrimming.CharacterEllipsis;
-        textStack.Children.Add(titleLabel);
+        var textStack = new StackPanel { Spacing = compact ? 0 : 2 };
+        TextBlock? resizeTimeLabel = null;
+        TextBlock? resizeCompactLabel = null;
+        if (compact)
+        {
+            var compactPrefix = done ? "✓ " : "";
+            var compactLabel = Text($"{compactPrefix}{block.Start} {block.Title}{titleSuffix}", ultraNarrow ? 11 : 12, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
+            compactLabel.Tag = $"day-event-label:{block.RuntimeId}:compact";
+            compactLabel.LineHeight = ultraNarrow ? 13 : 14;
+            compactLabel.TextWrapping = TextWrapping.NoWrap;
+            compactLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            resizeCompactLabel = compactLabel;
+            textStack.Children.Add(compactLabel);
+        }
+        else
+        {
+            var timeLabel = Text($"{block.Start}-{block.End}", 11, done ? "#64748b" : "#334155", FontWeight.SemiBold);
+            timeLabel.Tag = $"day-event-label:{block.RuntimeId}:time";
+            timeLabel.TextWrapping = TextWrapping.NoWrap;
+            timeLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            resizeTimeLabel = timeLabel;
+            textStack.Children.Add(timeLabel);
+            var titleLabel = Text($"{block.Title}{titleSuffix}", 13, done ? "#64748b" : current ? "#991b1b" : "#0f172a", FontWeight.SemiBold);
+            titleLabel.Tag = $"day-event-label:{block.RuntimeId}:title";
+            titleLabel.TextWrapping = TextWrapping.NoWrap;
+            titleLabel.TextTrimming = TextTrimming.CharacterEllipsis;
+            textStack.Children.Add(titleLabel);
+        }
         Grid.SetColumn(accentStrip, 0);
         Grid.SetColumn(textStack, ultraNarrow || !showCompleteButton ? 1 : 2);
         eventContent.Children.Add(accentStrip);
@@ -4991,7 +5119,15 @@ public sealed class MainWindow : Window
             if (_resizeBlock is null || args.Pointer.Captured != resizeGrip) return;
             var previewEnd = ResolveResizeEnd(args.GetPosition(_dayCanvas), pixelsPerMinute);
             border.Height = Math.Max(32, (previewEnd - block.StartMin) * pixelsPerMinute - 4);
-            timeLabel.Text = $"{block.Start}-{TimeText.ToTime(previewEnd)}";
+            if (resizeTimeLabel is not null)
+            {
+                resizeTimeLabel.Text = $"{block.Start}-{TimeText.ToTime(previewEnd)}";
+            }
+            else if (resizeCompactLabel is not null)
+            {
+                var compactPrefix = done ? "✓ " : "";
+                resizeCompactLabel.Text = $"{compactPrefix}{block.Start}-{TimeText.ToTime(previewEnd)} {block.Title}{titleSuffix}";
+            }
             border.Opacity = 0.86;
             args.Handled = true;
         };
