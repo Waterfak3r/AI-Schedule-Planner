@@ -1237,6 +1237,8 @@ public sealed class MainWindow : Window
         var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-work-area"));
         var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-main-column"));
         var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-side-column"));
+        var textBoxes = visibleControls.OfType<TextBox>().ToList();
+        var darkTextBoxCount = textBoxes.Count(textBox => IsDarkSolidBrush(textBox.Background));
         var mainPoint = mainColumn?.TranslatePoint(new Point(0, 0), this);
         var sidePoint = sideColumn?.TranslatePoint(new Point(0, 0), this);
         var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
@@ -1252,7 +1254,10 @@ public sealed class MainWindow : Window
             $"ai_settings_compact_expected: {compactExpected}",
             $"ai_settings_columns_stacked: {stacked}",
             $"ai_settings_columns_stack_pass: {stacked == compactExpected}",
-            $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 340)}"
+            $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= (compactExpected ? 420 : 340)}",
+            $"ai_settings_textbox_count: {textBoxes.Count}",
+            $"ai_settings_dark_textbox_count: {darkTextBoxCount}",
+            $"ai_settings_textbox_background_pass: {textBoxes.Count == 0 || darkTextBoxCount == 0}"
         ];
     }
 
@@ -1488,6 +1493,17 @@ public sealed class MainWindow : Window
         };
         probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         return probe.DesiredSize.Width;
+    }
+
+    private static bool IsDarkSolidBrush(IBrush? brush)
+    {
+        if (brush is not ISolidColorBrush solid)
+        {
+            return false;
+        }
+
+        var color = solid.Color;
+        return color.R < 180 && color.G < 180 && color.B < 180;
     }
 
     private IReadOnlyList<string> BuildWeekHeaderAuditRows(IReadOnlyList<Control> visibleControls)
