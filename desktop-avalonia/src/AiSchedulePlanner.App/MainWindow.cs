@@ -1463,6 +1463,17 @@ public sealed class MainWindow : Window
         var toolbar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-toolbar"));
         var calendar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-calendar"));
         var leftPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-left-panel"));
+        var focusAgenda = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-focus-agenda"));
+        var focusAgendaRows = visibleControls
+            .Where(control => control.Tag is string tag && tag.StartsWith("schedule-focus-agenda-row:", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var focusAgendaTexts = visibleControls
+            .OfType<TextBlock>()
+            .Where(control => control.Tag is string tag &&
+                (tag.StartsWith("schedule-focus-agenda-row-title:", StringComparison.OrdinalIgnoreCase) ||
+                 tag.StartsWith("schedule-focus-agenda-row-time:", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        var focusAgendaEmpty = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-focus-agenda-empty"));
         var periodTitle = visibleControls
             .OfType<TextBlock>()
             .FirstOrDefault(control => Equals(control.Tag, "schedule-period-title"));
@@ -1475,10 +1486,27 @@ public sealed class MainWindow : Window
         }
 
         var issuesForDisplay = GetScheduleIssuesForDisplay();
+        var issueBanner = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-issue-banner"));
+        var issueCard = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-issues-card"));
+        var issueBannerTexts = issueBanner is null
+            ? new List<TextBlock>()
+            : issueBanner.GetVisualDescendants().OfType<TextBlock>().ToList();
+        var issueBannerTextOverflowCount = CountControlsOutsideAncestor(issueBannerTexts, issueBanner);
         var staleOverrideIssueCount = issuesForDisplay.Count(issue => issue.Code == "manual_override_stale_rules");
         var staleOverrideIssueVisible = visibleTexts.Any(text => text.Contains("固定事项或任务规则已更新", StringComparison.Ordinal));
         var hasTransientTopStrip = _selectedRuntimeIds.Count > 0 || issuesForDisplay.Count > 0;
         var compactLimit = hasTransientTopStrip ? 132d : 54d;
+        var issueBannerExpected = IsSchedulePanelEffectivelyCollapsed() && issuesForDisplay.Count > 0;
+        var issueCardExpected = !IsSchedulePanelEffectivelyCollapsed() && issuesForDisplay.Count > 0;
+        var focusAgendaExpected = !IsSchedulePanelEffectivelyCollapsed() && _selectedRuntimeIds.Count == 0;
+        var focusAgendaInLeftPanel = focusAgenda is not null &&
+            leftPanel is not null &&
+            focusAgenda.GetVisualAncestors().OfType<Control>().Contains(leftPanel);
+        var focusAgendaInTop = focusAgenda is not null &&
+            top is not null &&
+            focusAgenda.GetVisualAncestors().OfType<Control>().Contains(top);
+        var focusAgendaTextOverflowCount = CountFocusAgendaTextOutsideRows(focusAgendaTexts);
+        var focusAgendaOutsideCount = CountControlsOutsideAncestor(focusAgendaRows, focusAgenda);
         var summaryChipsInScheduleMain = main is null
             ? new List<string>()
             : main.GetVisualDescendants()
@@ -1497,6 +1525,7 @@ public sealed class MainWindow : Window
             .Where(IsVisibleBlock)
             .Select(block => block.RuntimeId)
             .ToHashSet(StringComparer.Ordinal);
+        var focusAgendaExpectedRowCount = Math.Min(7, visibleBlockIds.Count);
         var dayEventControls = _scheduleView == ScheduleViewMode.Day
             ? visibleControls
                 .OfType<Border>()
@@ -1552,6 +1581,22 @@ public sealed class MainWindow : Window
             $"schedule_panel_pinned_open_for_narrow: {_schedulePanelPinnedOpenForNarrow}",
             $"schedule_panel_auto_collapse_threshold: {ScheduleAutoCollapsePanelViewportWidth:0.##}",
             $"schedule_left_panel_width: {(leftPanel?.Bounds.Width ?? 0):0.##}",
+            $"schedule_focus_agenda_expected: {focusAgendaExpected}",
+            $"schedule_focus_agenda_visible: {focusAgenda is not null}",
+            $"schedule_focus_agenda_visibility_pass: {focusAgendaExpected == (focusAgenda is not null)}",
+            $"schedule_focus_agenda_in_left_panel: {focusAgendaInLeftPanel}",
+            $"schedule_focus_agenda_in_left_panel_pass: {!focusAgendaExpected || focusAgendaInLeftPanel}",
+            $"schedule_focus_agenda_not_in_top_pass: {!focusAgendaInTop}",
+            $"schedule_focus_agenda_date: {_focusDate:yyyy-MM-dd}",
+            $"schedule_focus_agenda_total_visible_blocks: {visibleBlockIds.Count}",
+            $"schedule_focus_agenda_row_count: {focusAgendaRows.Count}",
+            $"schedule_focus_agenda_row_count_pass: {!focusAgendaExpected || focusAgendaRows.Count == focusAgendaExpectedRowCount}",
+            $"schedule_focus_agenda_empty_visible: {focusAgendaEmpty is not null}",
+            $"schedule_focus_agenda_selection_hidden_pass: {_selectedRuntimeIds.Count == 0 || focusAgenda is null}",
+            $"schedule_focus_agenda_collapsed_hidden_pass: {!IsSchedulePanelEffectivelyCollapsed() || focusAgenda is null}",
+            $"schedule_focus_agenda_row_text_nowrap_pass: {focusAgendaTexts.All(text => text.TextWrapping == TextWrapping.NoWrap)}",
+            $"schedule_focus_agenda_row_text_overflow_count: {focusAgendaTextOverflowCount}",
+            $"schedule_focus_agenda_row_bounds_pass: {focusAgendaOutsideCount == 0}",
             $"schedule_toolbar_present: {toolbar is not null}",
             $"schedule_toolbar_height: {(toolbar?.Bounds.Height ?? 0):0.##}",
             $"schedule_toolbar_title_text: {periodTitle?.Text ?? ""}",
@@ -1562,6 +1607,17 @@ public sealed class MainWindow : Window
             $"schedule_top_non_calendar_height: {topHeight:0.##}",
             $"schedule_top_compact_limit: {compactLimit:0.##}",
             $"schedule_top_compact_pass: {!double.IsNaN(topHeight) && topHeight <= compactLimit}",
+            $"schedule_issue_banner_expected: {issueBannerExpected}",
+            $"schedule_issue_banner_visible: {issueBanner is not null}",
+            $"schedule_issue_banner_visibility_pass: {issueBannerExpected == (issueBanner is not null)}",
+            $"schedule_issue_banner_height: {(issueBanner?.Bounds.Height ?? 0):0.##}",
+            $"schedule_issue_banner_compact_pass: {issueBanner is null || issueBanner.Bounds.Height <= 38}",
+            $"schedule_issue_banner_text_nowrap_pass: {issueBannerTexts.All(text => text.TextWrapping == TextWrapping.NoWrap)}",
+            $"schedule_issue_banner_text_overflow_count: {issueBannerTextOverflowCount}",
+            $"schedule_issue_banner_text_bounds_pass: {issueBannerTextOverflowCount == 0}",
+            $"schedule_issue_banner_tooltip_present: {issueBanner is null || ToolTip.GetTip(issueBanner) is not null}",
+            $"schedule_issue_card_visible: {issueCard is not null}",
+            $"schedule_issue_card_visibility_pass: {issueCardExpected == (issueCard is not null)}",
             $"schedule_summary_strip_visible: {summaryChipsInScheduleMain.Count > 0}",
             $"schedule_summary_chips_in_main: {string.Join(" | ", summaryChipsInScheduleMain)}",
             $"schedule_exact_save_button_visible: {buttonLabels.Contains("保存")}",
@@ -1745,6 +1801,78 @@ public sealed class MainWindow : Window
                 point.Value.Y < -tolerance ||
                 point.Value.X + control.Bounds.Width > dayCell.Bounds.Width + tolerance ||
                 point.Value.Y + control.Bounds.Height > dayCell.Bounds.Height + tolerance)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountControlsOutsideAncestor(IEnumerable<Control> controls, Control? ancestor)
+    {
+        var count = 0;
+        foreach (var control in controls)
+        {
+            if (ancestor is null)
+            {
+                count++;
+                continue;
+            }
+
+            var point = control.TranslatePoint(new Point(0, 0), ancestor);
+            if (point is null)
+            {
+                count++;
+                continue;
+            }
+
+            const double tolerance = 0.5;
+            if (point.Value.X < -tolerance ||
+                point.Value.Y < -tolerance ||
+                point.Value.X + control.Bounds.Width > ancestor.Bounds.Width + tolerance ||
+                point.Value.Y + control.Bounds.Height > ancestor.Bounds.Height + tolerance)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountFocusAgendaTextOutsideRows(IEnumerable<TextBlock> texts)
+    {
+        var count = 0;
+        foreach (var text in texts)
+        {
+            var tag = text.Tag as string ?? "";
+            var runtimeId = tag.StartsWith("schedule-focus-agenda-row-title:", StringComparison.OrdinalIgnoreCase)
+                ? tag["schedule-focus-agenda-row-title:".Length..]
+                : tag.StartsWith("schedule-focus-agenda-row-time:", StringComparison.OrdinalIgnoreCase)
+                    ? tag["schedule-focus-agenda-row-time:".Length..]
+                    : "";
+            var ownerTag = $"schedule-focus-agenda-row:{runtimeId}";
+            var owner = text.GetVisualAncestors()
+                .OfType<Border>()
+                .FirstOrDefault(border => Equals(border.Tag, ownerTag));
+            if (owner is null)
+            {
+                count++;
+                continue;
+            }
+
+            var point = text.TranslatePoint(new Point(0, 0), owner);
+            if (point is null)
+            {
+                count++;
+                continue;
+            }
+
+            const double tolerance = 0.5;
+            if (point.Value.X < -tolerance ||
+                point.Value.Y < -tolerance ||
+                point.Value.X + text.Bounds.Width > owner.Bounds.Width + tolerance ||
+                point.Value.Y + text.Bounds.Height > owner.Bounds.Height + tolerance)
             {
                 count++;
             }
@@ -2039,6 +2167,8 @@ public sealed class MainWindow : Window
         var workArea = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-work-area"));
         var messagePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-message-panel"));
         var sidePanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-side-panel"));
+        var actionNotice = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-action-preview-notice"));
+        var actionNoticeWarning = visibleControls.FirstOrDefault(control => Equals(control.Tag, "chat-action-preview-notice-warning"));
         var messagePoint = messagePanel?.TranslatePoint(new Point(0, 0), this);
         var sidePoint = sidePanel?.TranslatePoint(new Point(0, 0), this);
         var compactExpected = (workArea?.Bounds.Width ?? 0) < 760;
@@ -2054,12 +2184,58 @@ public sealed class MainWindow : Window
         var aggregatePreview = _pendingActions.Count > 0
             ? AggregateActionPreview(BuildActionPreviewGroups())
             : new ScheduleActionPreview();
+        var warningActionCount = CountWarningActions(aggregatePreview);
+        var rawJsonTexts = visibleTexts
+            .Where(IsRawJsonPreviewText)
+            .Distinct()
+            .Take(8)
+            .ToList();
+        var actionNoticeTexts = actionNotice is null
+            ? new List<string>()
+            : actionNotice.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Select(text => text.Text ?? "")
+                .Where(text => !string.IsNullOrWhiteSpace(text))
+                .ToList();
+        var actionNoticeTextBlocks = actionNotice is null
+            ? new List<TextBlock>()
+            : actionNotice.GetVisualDescendants().OfType<TextBlock>().ToList();
+        var actionNoticeTextOverflowCount = CountControlsOutsideAncestor(actionNoticeTextBlocks, actionNotice);
+        var actionNoticeCopyPass = _pendingActions.Count == 0 ||
+            (actionNoticeTexts.Any(text => text.Contains("手动调整", StringComparison.OrdinalIgnoreCase)) &&
+             actionNoticeTexts.Any(text =>
+                 text.Contains("不会修改重复任务规则", StringComparison.OrdinalIgnoreCase) ||
+                 text.Contains("不改重复任务规则", StringComparison.OrdinalIgnoreCase)));
+        var actionPreviewVisible = _pendingActions.Count > 0 && sidePanel is not null;
 
         return
         [
             $"chat_pending_actions: {_pendingActions.Count}",
             $"chat_preview_applicable_count: {aggregatePreview.ApplicableCount}",
-            $"chat_preview_warning_actions: {CountWarningActions(aggregatePreview)}",
+            $"chat_preview_warning_actions: {warningActionCount}",
+            $"chat_action_preview_visible: {actionPreviewVisible}",
+            $"chat_action_preview_notice_visible: {actionNotice is not null}",
+            $"chat_action_preview_notice_visibility_pass: {(_pendingActions.Count > 0) == (actionNotice is not null)}",
+            $"chat_action_preview_notice_height: {(actionNotice?.Bounds.Height ?? 0):0.##}",
+            $"chat_action_preview_notice_compact_pass: {actionNotice is null || actionNotice.Bounds.Height <= 58}",
+            $"chat_action_preview_notice_copy_pass: {actionNoticeCopyPass}",
+            $"chat_action_preview_notice_warning_visible: {actionNoticeWarning is not null}",
+            $"chat_action_preview_notice_warning_pass: {(warningActionCount > 0) == (actionNoticeWarning is not null)}",
+            $"chat_action_preview_notice_text_overflow_count: {actionNoticeTextOverflowCount}",
+            $"chat_action_preview_notice_text_bounds_pass: {actionNoticeTextOverflowCount == 0}",
+            $"chat_action_preview_notice_texts: {string.Join(" | ", actionNoticeTexts)}",
+            $"chat_action_notice_expected: {_pendingActions.Count > 0}",
+            $"chat_action_notice_visible: {actionNotice is not null}",
+            $"chat_action_notice_visibility_pass: {(_pendingActions.Count > 0) == (actionNotice is not null)}",
+            $"chat_action_notice_manual_text_visible: {actionNoticeCopyPass}",
+            $"chat_action_notice_warning_expected: {warningActionCount > 0}",
+            $"chat_action_notice_warning_visible: {actionNoticeWarning is not null}",
+            $"chat_action_notice_warning_visibility_pass: {(warningActionCount > 0) == (actionNoticeWarning is not null)}",
+            $"chat_action_notice_compact_pass: {actionNotice is null || actionNotice.Bounds.Height <= 58}",
+            $"chat_action_notice_bounds_pass: {actionNoticeTextOverflowCount == 0}",
+            $"chat_raw_json_visible: {rawJsonTexts.Count > 0}",
+            $"chat_raw_json_hidden_pass: {rawJsonTexts.Count == 0}",
+            $"chat_raw_json_texts: {string.Join(" | ", rawJsonTexts)}",
             $"chat_warning_texts_visible: {warningTexts.Count}",
             $"chat_warning_texts: {string.Join(" | ", warningTexts)}",
             $"chat_work_area_width: {(workArea?.Bounds.Width ?? 0):0.##}",
@@ -2083,6 +2259,22 @@ public sealed class MainWindow : Window
             text.Contains("时间置信度", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("置信度", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("AI 假设", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRawJsonPreviewText(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length < 2) return false;
+
+        return trimmed.StartsWith("{", StringComparison.Ordinal) ||
+            trimmed.StartsWith("[{", StringComparison.Ordinal) ||
+            text.Contains("\"actions\"", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("\"type\"", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("\"start\"", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("add_task_block", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("move_block", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("remove_block", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("```json", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsScheduleTutorialText(string text)
@@ -2781,7 +2973,11 @@ public sealed class MainWindow : Window
 
     private Control RenderOverviewTimeline(IReadOnlyList<ScheduleBlock> visibleBlocks)
     {
-        var root = new StackPanel { Spacing = 8 };
+        var root = new StackPanel
+        {
+            Tag = "chat-action-preview",
+            Spacing = 8
+        };
         root.Children.Add(Text("今天时间线", 15, "#111827", FontWeight.SemiBold));
         if (visibleBlocks.Count == 0)
         {
@@ -3234,6 +3430,7 @@ public sealed class MainWindow : Window
             Padding = new Thickness(14),
             Child = new ScrollViewer
             {
+                Tag = "chat-action-preview",
                 Content = root,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto
@@ -3361,6 +3558,7 @@ public sealed class MainWindow : Window
 
         var root = new StackPanel { Spacing = 8 };
         root.Children.Add(RenderActionPreviewHeader(_pendingActions.Count, affectedDates, aggregatePreview.ApplicableCount, warningActionCount));
+        root.Children.Add(RenderActionPreviewNotice(warningActionCount));
         root.Children.Add(RenderActionPreviewSummary(aggregatePreview));
 
         var displayIndex = 1;
@@ -3402,13 +3600,16 @@ public sealed class MainWindow : Window
 
         var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var applyButton = Button(ActionApplyButtonText(aggregatePreview.ApplicableCount, affectedDates.Count, warningActionCount), (_, _) => ApplyPendingActions());
+        applyButton.Tag = "chat-action-preview-apply";
         applyButton.IsEnabled = aggregatePreview.ApplicableCount > 0;
         actionRow.Children.Add(applyButton);
-        actionRow.Children.Add(Button("丢弃", (_, _) =>
+        var discardButton = Button("丢弃", (_, _) =>
         {
             _pendingActions.Clear();
             RenderActivePage();
-        }, secondary: true));
+        }, secondary: true);
+        discardButton.Tag = "chat-action-preview-discard";
+        actionRow.Children.Add(discardButton);
         root.Children.Add(actionRow);
         return new Border
         {
@@ -3456,6 +3657,32 @@ public sealed class MainWindow : Window
         }
 
         return root;
+    }
+
+    private static Control RenderActionPreviewNotice(int warningActionCount)
+    {
+        var root = new StackPanel { Spacing = 2 };
+        var body = Text("应用后保存为对应日期的手动调整，不改重复任务规则。", 11, "#475569", FontWeight.SemiBold);
+        body.Tag = "chat-action-preview-notice-manual";
+        root.Children.Add(body);
+
+        if (warningActionCount > 0)
+        {
+            var warning = Text("含糊时间按预览处理；缺结束时间暂按 30 分钟，请核对。", 11, "#92400e");
+            warning.Tag = "chat-action-preview-notice-warning";
+            root.Children.Add(warning);
+        }
+
+        return new Border
+        {
+            Tag = "chat-action-preview-notice",
+            Background = Brush(warningActionCount > 0 ? "#fffbeb" : "#f8fafc"),
+            BorderBrush = Brush(warningActionCount > 0 ? "#fde68a" : "#e2e8f0"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(9, 6),
+            Child = root
+        };
     }
 
     private List<ActionPreviewDateGroup> BuildActionPreviewGroups()
@@ -3615,7 +3842,11 @@ public sealed class MainWindow : Window
         var conflictCount = preview.Results.Count(item => item.Status == "conflict");
         var invalidCount = preview.Results.Count(item => item.Status == "invalid" || item.Status == "skipped");
         var warningActionCount = CountWarningActions(preview);
-        var grid = new UniformGrid { Columns = 2 };
+        var grid = new UniformGrid
+        {
+            Tag = "chat-action-preview-summary",
+            Columns = 2
+        };
         grid.Children.Add(ActionSummaryTile("可应用", preview.ApplicableCount.ToString(), "#166534", "#f0fdf4", "#bbf7d0"));
         grid.Children.Add(ActionSummaryTile("需核对", warningActionCount.ToString(), "#92400e", "#fffbeb", "#fde68a"));
         grid.Children.Add(ActionSummaryTile("冲突", conflictCount.ToString(), "#991b1b", "#fef2f2", "#fecaca"));
@@ -3856,14 +4087,19 @@ public sealed class MainWindow : Window
         {
             var leftRail = new StackPanel { Spacing = 12 };
             leftRail.Children.Add(RenderMiniMonthCard());
-            if (issues.Count > 0)
-            {
-                leftRail.Children.Add(RenderScheduleIssues(issues));
-            }
 
             if (_selectedRuntimeIds.Count > 0)
             {
                 leftRail.Children.Add(RenderSelectionInspector());
+            }
+            else
+            {
+                leftRail.Children.Add(RenderFocusDayAgendaCard());
+            }
+
+            if (issues.Count > 0)
+            {
+                leftRail.Children.Add(RenderScheduleIssues(issues));
             }
             var leftScroller = new ScrollViewer
             {
@@ -3902,7 +4138,7 @@ public sealed class MainWindow : Window
         }
         if (issues.Count > 0 && panelCollapsed)
         {
-            statusStack.Children.Add(RenderScheduleIssues(issues));
+            statusStack.Children.Add(RenderScheduleIssueBanner(issues));
         }
 
         if (statusStack.Children.Count > 0)
@@ -4633,6 +4869,7 @@ public sealed class MainWindow : Window
 
         return new Border
         {
+            Tag = "schedule-issues-card",
             Background = Brush(hasError ? "#fef2f2" : "#fffbeb"),
             BorderBrush = Brush(hasError ? "#fecaca" : "#fde68a"),
             BorderThickness = new Thickness(1),
@@ -4640,6 +4877,74 @@ public sealed class MainWindow : Window
             Padding = new Thickness(12, 9),
             Child = root
         };
+    }
+
+    private static Control RenderScheduleIssueBanner(IReadOnlyList<ScheduleIssue> issues)
+    {
+        var hasError = issues.Any(issue => issue.Level == ScheduleIssueLevel.Error);
+        var title = hasError ? "时间问题" : "日程提示";
+        var message = issues.Count == 0 ? "" : issues[0].Message;
+        var extra = issues.Count > 1 ? $"+{issues.Count - 1}" : "";
+        var color = hasError ? "#991b1b" : "#92400e";
+
+        var root = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*,Auto"),
+            ColumnSpacing = 8,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+
+        var marker = new Border
+        {
+            Width = 6,
+            Height = 22,
+            CornerRadius = new CornerRadius(3),
+            Background = Brush(hasError ? "#dc2626" : "#f59e0b"),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(marker, 0);
+        root.Children.Add(marker);
+
+        var titleText = MonthSingleLineText(title, 12, color, FontWeight.SemiBold);
+        titleText.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(titleText, 1);
+        root.Children.Add(titleText);
+
+        var messageText = MonthSingleLineText(message, 12, hasError ? "#7f1d1d" : "#78350f");
+        messageText.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(messageText, 2);
+        root.Children.Add(messageText);
+
+        if (!string.IsNullOrWhiteSpace(extra))
+        {
+            var extraText = MonthSingleLineText(extra, 12, color, FontWeight.SemiBold);
+            extraText.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(extraText, 3);
+            root.Children.Add(extraText);
+        }
+
+        var banner = new Border
+        {
+            Tag = "schedule-issue-banner",
+            Background = Brush(hasError ? "#fff7f7" : "#fffbeb"),
+            BorderBrush = Brush(hasError ? "#fecaca" : "#fde68a"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(10, 6),
+            MinHeight = 34,
+            Child = root
+        };
+        var tooltipLines = issues
+            .Take(4)
+            .Select(issue => issue.Message)
+            .ToList();
+        if (issues.Count > 4)
+        {
+            tooltipLines.Add($"还有 {issues.Count - 4} 条问题");
+        }
+        tooltipLines.Add("展开日历查看完整信息");
+        ToolTip.SetTip(banner, string.Join('\n', tooltipLines));
+        return banner;
     }
 
     private Control RenderMiniMonthCard()
@@ -4860,8 +5165,10 @@ public sealed class MainWindow : Window
     {
         var root = new StackPanel { Spacing = 8 };
         var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 6 };
-        var title = Text($"{_focusDate:MM-dd} 周{WeekdayText(_focusDate)}", 15, "#111827", FontWeight.SemiBold);
+        var title = MonthSingleLineText($"{_focusDate:MM-dd} 周{WeekdayText(_focusDate)}", 15, "#111827", FontWeight.SemiBold);
+        title.Tag = "schedule-focus-agenda-date";
         var add = Button("新建", async (_, _) => await CreateScheduleBlockAsync(ResolveDefaultNewBlockStartMin()), secondary: true);
+        add.Tag = "schedule-focus-agenda-create";
         var open = Button("打开", (_, _) =>
         {
             SetScheduleView(ScheduleViewMode.Day, savePreference: true);
@@ -4869,6 +5176,8 @@ public sealed class MainWindow : Window
             RebuildSchedules();
             RenderActivePage();
         }, secondary: true);
+        open.Tag = "schedule-focus-agenda-open-day";
+        ToolTip.SetTip(open, "打开日视图");
         add.Padding = new Thickness(8, 4);
         add.MinHeight = 28;
         open.Padding = new Thickness(8, 4);
@@ -4889,6 +5198,7 @@ public sealed class MainWindow : Window
         {
             root.Children.Add(new Border
             {
+                Tag = "schedule-focus-agenda-empty",
                 Background = Brush("#f8fafc"),
                 BorderBrush = Brush("#e2e8f0"),
                 BorderThickness = new Thickness(1),
@@ -4899,17 +5209,25 @@ public sealed class MainWindow : Window
         }
         else
         {
+            var list = new StackPanel
+            {
+                Tag = "schedule-focus-agenda-list",
+                Spacing = 8
+            };
             foreach (var block in blocks.Take(7))
             {
-                root.Children.Add(BuildFocusDayAgendaRow(block));
+                list.Children.Add(BuildFocusDayAgendaRow(block));
             }
+            root.Children.Add(list);
             if (blocks.Count > 7)
             {
                 root.Children.Add(Text($"还有 {blocks.Count - 7} 个", 11, "#64748b", FontWeight.SemiBold));
             }
         }
 
-        return Card("选中日期", root);
+        var card = Card("当天日程", root);
+        card.Tag = "schedule-focus-agenda";
+        return card;
     }
 
     private Control BuildFocusDayAgendaRow(ScheduleBlock block)
@@ -4941,6 +5259,7 @@ public sealed class MainWindow : Window
                 VerticalContentAlignment = VerticalAlignment.Center
             };
             check.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            check.Tapped += (_, args) => args.Handled = true;
             ToolTip.SetTip(check, done ? "取消完成" : "标记完成");
             leading = check;
         }
@@ -4968,8 +5287,12 @@ public sealed class MainWindow : Window
         }
 
         var text = new StackPanel { Spacing = 1 };
-        text.Children.Add(Text($"{block.Start}-{block.End}", 11, done ? "#94a3b8" : "#475569", FontWeight.SemiBold));
-        text.Children.Add(Text(block.Title, 12, done ? "#64748b" : "#111827", FontWeight.SemiBold));
+        var timeText = MonthSingleLineText($"{block.Start}-{block.End}", 11, done ? "#94a3b8" : "#475569", FontWeight.SemiBold);
+        timeText.Tag = $"schedule-focus-agenda-row-time:{block.RuntimeId}";
+        var titleText = MonthSingleLineText(block.Title, 12, done ? "#64748b" : "#111827", FontWeight.SemiBold);
+        titleText.Tag = $"schedule-focus-agenda-row-title:{block.RuntimeId}";
+        text.Children.Add(timeText);
+        text.Children.Add(titleText);
         Grid.SetColumn(leading, 0);
         Grid.SetColumn(text, 1);
         grid.Children.Add(leading);
@@ -4977,6 +5300,7 @@ public sealed class MainWindow : Window
 
         var row = new Border
         {
+            Tag = $"schedule-focus-agenda-row:{block.RuntimeId}",
             Background = Brush(selected ? "#e8f0fe" : done ? "#f8fafc" : "#ffffff"),
             BorderBrush = Brush(selected ? "#1a73e8" : "#e2e8f0"),
             BorderThickness = new Thickness(selected ? 2 : 1),
