@@ -117,23 +117,28 @@ internal static class Ui
 
         var track = new Grid
         {
+            Tag = "overview-completion-track",
             Height = 12,
-            ClipToBounds = true
+            ClipToBounds = true,
+            ColumnDefinitions = new ColumnDefinitions($"{percent}*,{100 - percent}*")
         };
-        track.Children.Add(new Border
+        var trackBackground = new Border
         {
             Background = Brush("#e2e8f0"),
             CornerRadius = new CornerRadius(8)
-        });
-        track.Children.Add(new Border
+        };
+        Grid.SetColumnSpan(trackBackground, 2);
+        track.Children.Add(trackBackground);
+        if (percent > 0)
         {
-            Background = Brush(percent >= 80 ? "#22c55e" : percent >= 40 ? "#38bdf8" : "#f59e0b"),
-            CornerRadius = new CornerRadius(8),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Width = Math.Max(8, percent * 5.2)
-        });
+            track.Children.Add(new Border
+            {
+                Tag = "overview-completion-fill",
+                Background = Brush(percent >= 80 ? "#22c55e" : percent >= 40 ? "#38bdf8" : "#f59e0b"),
+                CornerRadius = new CornerRadius(8)
+            });
+        }
         root.Children.Add(track);
-        root.Children.Add(Text(completion.Total == 0 ? "今天还没有可完成的日程。" : "完成状态会自动保存，重启后仍会保留。", 12, "#64748b"));
 
         return new Border
         {

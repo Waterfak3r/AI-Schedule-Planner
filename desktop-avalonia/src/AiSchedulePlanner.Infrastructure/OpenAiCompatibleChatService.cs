@@ -139,6 +139,7 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
             "If start is clear but end/duration is missing, use durationMinutes=30, set timeConfidence=\"inferred_duration\", needsConfirmation=true, add an assumptions item, and say in text that the time span is uncertain and should be adjusted by the user.",
             "If a title already exists in current blocks, use move_block unless the user clearly asks to add another instance.",
             "For move_block/remove_block, include runtimeId when possible; if there are multiple possible matches and the user did not give enough detail, return actions: [] and ask a clarification in text.",
+            "If the user is only chatting or asking for advice without requesting a schedule edit, return actions: [].",
             "If the request is vague and unsafe to apply, return actions: [].",
             $"Focus date: {request.FocusDate:yyyy-MM-dd}",
             $"User style prompt for the text field only, never for JSON shape or actions: {request.Settings.StylePrompt}",
@@ -245,13 +246,9 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
         foreach (var item in toolArray.EnumerateArray())
         {
             ScheduleAction? action;
-            string tool;
             try
             {
-                tool = GetString(item, "tool", "name", "type");
-                var args = item.TryGetProperty("args", out var argsElement) ? argsElement :
-                    item.TryGetProperty("arguments", out var argumentsElement) ? argumentsElement : item;
-                action = ReadAction(args);
+                action = ReadToolCall(item);
             }
             catch
             {
@@ -259,12 +256,71 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
             }
 
             if (action is null) continue;
-            action.Type = string.IsNullOrWhiteSpace(action.Type) ? tool : action.Type;
             yield return action;
         }
     }
 
-    private static ScheduleAction? ReadAction(JsonElement element)
+    private static ScheduleAction? ReadToolCall(JsonElement item)
+    {
+        var tool = GetToolName(item);
+        if (!IsSupportedScheduleActionType(tool)) return null;
+
+        var args = GetToolArguments(item);
+        if (args.ValueKind == JsonValueKind.String)
+        {
+            var json = args.GetString();
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            using var doc = JsonDocument.Parse(json);
+            return ReadAction(doc.RootElement, tool);
+        }
+
+        return ReadAction(args.ValueKind == JsonValueKind.Object ? args : item, tool);
+    }
+
+    private static string GetToolName(JsonElement item)
+    {
+        var tool = GetString(item, "tool", "name");
+        if (!string.IsNullOrWhiteSpace(tool)) return tool;
+
+        if (item.TryGetProperty("function", out var functionElement) && functionElement.ValueKind == JsonValueKind.Object)
+        {
+            tool = GetString(functionElement, "name");
+            if (!string.IsNullOrWhiteSpace(tool)) return tool;
+        }
+
+        return GetString(item, "type");
+    }
+
+    private static JsonElement GetToolArguments(JsonElement item)
+    {
+        if (item.TryGetProperty("args", out var argsElement)) return argsElement;
+        if (item.TryGetProperty("arguments", out var argumentsElement)) return argumentsElement;
+        if (item.TryGetProperty("function", out var functionElement) && functionElement.ValueKind == JsonValueKind.Object)
+        {
+            if (functionElement.TryGetProperty("args", out var functionArgsElement)) return functionArgsElement;
+            if (functionElement.TryGetProperty("arguments", out var functionArgumentsElement)) return functionArgumentsElement;
+        }
+
+        return item;
+    }
+
+    private static bool IsSupportedScheduleActionType(string value)
+    {
+        return NormalizeActionType(value) is
+            "add_task_block" or
+            "schedule.add_block" or
+            "move_block" or
+            "schedule.move_block" or
+            "remove_block" or
+            "schedule.remove_block";
+    }
+
+    private static string NormalizeActionType(string value)
+    {
+        return (value ?? string.Empty).Trim().ToLowerInvariant().Replace('-', '_');
+    }
+
+    private static ScheduleAction? ReadAction(JsonElement element, string fallbackType = "")
     {
         if (element.ValueKind != JsonValueKind.Object) return null;
         var action = new ScheduleAction
@@ -294,6 +350,11 @@ public sealed class OpenAiCompatibleChatService : IAiChatService
         if (TryGetBool(element, out var needsConfirmation, "needsConfirmation", "needs_confirmation"))
         {
             action.NeedsConfirmation = needsConfirmation;
+        }
+
+        if (string.IsNullOrWhiteSpace(action.Type))
+        {
+            action.Type = fallbackType.Trim();
         }
 
         return string.IsNullOrWhiteSpace(action.Type) ? null : action;

@@ -59,15 +59,6 @@ public sealed class MainWindow : Window
     private readonly StackPanel _navPanel = new() { Spacing = 6 };
     private readonly TextBlock _statusText = new() { Foreground = Brush("#64748b"), FontSize = 12 };
     private readonly TextBlock _topbarTitle = Text("正在加载", 18, "#111827", FontWeight.SemiBold);
-    private readonly TextBlock _topbarStatusText = new()
-    {
-        Text = "正在加载本地数据",
-        FontSize = 11,
-        FontWeight = FontWeight.SemiBold,
-        Foreground = Brush("#475569"),
-        TextWrapping = TextWrapping.NoWrap,
-        TextTrimming = TextTrimming.CharacterEllipsis
-    };
     private readonly Dictionary<string, Button> _navButtons = [];
     private readonly Dictionary<string, string> _navFullLabels = [];
     private readonly List<AiChatMessage> _chatMessages = [];
@@ -75,6 +66,7 @@ public sealed class MainWindow : Window
     private readonly HashSet<string> _selectedRuntimeIds = [];
     private bool _chatBusy;
     private int _autosaveVersion;
+    private int _statusToastVersion;
     private int _monthFocusVersion;
     private int _agendaSelectVersion;
     private int _scheduleViewportVersion;
@@ -82,13 +74,14 @@ public sealed class MainWindow : Window
     private Button? _undoButton;
     private Grid? _shellRoot;
     private Border? _sidebarHost;
+    private Border? _topbarHost;
+    private Border? _contentHost;
+    private Border? _statusToastHost;
     private TextBlock? _brandTitle;
     private TextBlock? _brandSubtitle;
     private Border? _brandAccent;
-    private TextBlock? _dataDirectoryText;
     private Button? _sidebarToggleButton;
     private TextBlock? _sidebarToggleIcon;
-    private Border? _topbarStatusPill;
     private bool _sidebarCollapsed;
     private double _dayEventWidth = DayEventWidthDefault;
     private double _weekDayWidth = WeekDayWidthDefault;
@@ -202,14 +195,6 @@ public sealed class MainWindow : Window
         DockPanel.SetDock(brand, Dock.Top);
         sideDock.Children.Add(brand);
 
-        var footer = new StackPanel { Spacing = 6 };
-        footer.Children.Add(_statusText);
-        _dataDirectoryText = Text("本地数据已启用", 10, "#6b7280");
-        ToolTip.SetTip(_dataDirectoryText, _store.DataDirectory);
-        footer.Children.Add(_dataDirectoryText);
-        DockPanel.SetDock(footer, Dock.Bottom);
-        sideDock.Children.Add(footer);
-
         _navPanel.Margin = new Thickness(0, 30, 0, 0);
         foreach (var item in new[]
                  {
@@ -242,6 +227,7 @@ public sealed class MainWindow : Window
             Padding = new Thickness(22, 14),
             Child = BuildTopbar()
         };
+        _topbarHost = topbar;
         Grid.SetRow(topbar, 0);
         workspace.Children.Add(topbar);
 
@@ -250,8 +236,26 @@ public sealed class MainWindow : Window
             Padding = new Thickness(24),
             Child = _content
         };
+        _contentHost = contentHost;
         Grid.SetRow(contentHost, 1);
         workspace.Children.Add(contentHost);
+
+        _statusToastHost = new Border
+        {
+            Background = Brush("#111827"),
+            BorderBrush = Brush("#334155"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12, 8),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 24, 24),
+            MaxWidth = 460,
+            IsVisible = false,
+            Child = _statusText
+        };
+        Grid.SetRow(_statusToastHost, 1);
+        workspace.Children.Add(_statusToastHost);
 
         Grid.SetColumn(sidebar, 0);
         Grid.SetColumn(workspace, 1);
@@ -318,7 +322,7 @@ public sealed class MainWindow : Window
                 ? Bounds.Width
                 : Width;
         var sidebarWidth = _sidebarCollapsed ? SidebarCollapsedWidth : SidebarExpandedWidth;
-        var contentPadding = 48d;
+        var contentPadding = _activePage == "Schedule" ? 32d : 48d;
         var schedulePanelWidth = _state.Preferences.SchedulePanelCollapsed ? 0d : 256d;
         return Math.Max(260, windowWidth - sidebarWidth - contentPadding - schedulePanelWidth - 4);
     }
@@ -363,12 +367,6 @@ public sealed class MainWindow : Window
             _brandAccent.IsVisible = !_sidebarCollapsed;
         }
 
-        if (_dataDirectoryText is not null)
-        {
-            _dataDirectoryText.IsVisible = !_sidebarCollapsed;
-        }
-
-        _statusText.IsVisible = !_sidebarCollapsed;
         _navPanel.Margin = _sidebarCollapsed ? new Thickness(0, 24, 0, 0) : new Thickness(0, 30, 0, 0);
 
         if (_sidebarToggleButton is not null)
@@ -392,30 +390,13 @@ public sealed class MainWindow : Window
     private Control BuildTopbar()
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        var left = new StackPanel { Spacing = 5 };
-        _topbarStatusPill = new Border
-        {
-            Background = Brush("#f8fafc"),
-            BorderBrush = Brush("#e2e8f0"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(8, 4),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            MaxWidth = 620,
-            Child = _topbarStatusText
-        };
-        left.Children.Add(_topbarTitle);
-        left.Children.Add(_topbarStatusPill);
-
         var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        var saveButton = Button("保存", async (_, _) => await SaveStateAsync(), secondary: true);
         _undoButton = Button("撤销", (_, _) => UndoLastScheduleChange(), secondary: true);
         _undoButton.IsEnabled = false;
         right.Children.Add(_undoButton);
-        right.Children.Add(saveButton);
-        Grid.SetColumn(left, 0);
+        Grid.SetColumn(_topbarTitle, 0);
         Grid.SetColumn(right, 1);
-        grid.Children.Add(left);
+        grid.Children.Add(_topbarTitle);
         grid.Children.Add(right);
         return grid;
     }
@@ -491,6 +472,12 @@ public sealed class MainWindow : Window
 
         switch (scenario.Trim().ToLowerInvariant())
         {
+            case "overview":
+                ApplyOverviewReviewScenario();
+                break;
+            case "overview-completion":
+                ApplyOverviewCompletionReviewScenario();
+                break;
             case "schedule":
             case "schedule-day":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Day, panelCollapsed: false, sidebarCollapsed: false, selectBlock: false, markComplete: false);
@@ -510,7 +497,123 @@ public sealed class MainWindow : Window
             case "schedule-collapsed":
                 ApplyScheduleReviewScenario(ScheduleViewMode.Week, panelCollapsed: true, sidebarCollapsed: true, selectBlock: false, markComplete: false);
                 break;
+            case "chat-warnings":
+                ApplyChatWarningsReviewScenario();
+                break;
         }
+    }
+
+    private void ApplyOverviewReviewScenario()
+    {
+        _activePage = "Overview";
+        _state.Preferences.StartupPage = "Overview";
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+        RebuildSchedules();
+        RenderActivePage();
+    }
+
+    private void ApplyOverviewCompletionReviewScenario()
+    {
+        _activePage = "Overview";
+        _state.Preferences.StartupPage = "Overview";
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+        _focusDate = new DateOnly(2026, 6, 7);
+
+        var schedule = new DaySchedule
+        {
+            Date = _focusDate,
+            Blocks =
+            [
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-1",
+                    Type = ScheduleBlockType.Task,
+                    Title = "复习数学",
+                    Category = "study",
+                    StartMin = 8 * 60,
+                    EndMin = 9 * 60,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-2",
+                    Type = ScheduleBlockType.Task,
+                    Title = "写代码",
+                    Category = "code",
+                    StartMin = 9 * 60 + 30,
+                    EndMin = 10 * 60 + 30,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-fixed",
+                    Type = ScheduleBlockType.Fixed,
+                    Title = "固定会议",
+                    StartMin = 10 * 60 + 45,
+                    EndMin = 11 * 60,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-3",
+                    Type = ScheduleBlockType.Task,
+                    Title = "整理笔记",
+                    Category = "study",
+                    StartMin = 11 * 60,
+                    EndMin = 12 * 60,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-4",
+                    Type = ScheduleBlockType.Task,
+                    Title = "跑步",
+                    Category = "workout",
+                    StartMin = 18 * 60,
+                    EndMin = 18 * 60 + 40,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "overview-progress-buffer",
+                    Type = ScheduleBlockType.Buffer,
+                    Title = "缓冲",
+                    StartMin = 12 * 60,
+                    EndMin = 12 * 60 + 15,
+                    Editable = false
+                }
+            ]
+        };
+        schedule.Summary = BuildSummaryForReview(schedule);
+        _state.DayOverrides[DateKey(_focusDate)] = schedule;
+        _state.Completed["overview-progress-1"] = true;
+        _state.Completed["overview-progress-2"] = true;
+        _state.Completed["overview-progress-fixed"] = true;
+        _state.Completed.Remove("overview-progress-3");
+        _state.Completed.Remove("overview-progress-4");
+        RebuildSchedules();
+        RenderActivePage();
+    }
+
+    private static ScheduleSummary BuildSummaryForReview(DaySchedule schedule)
+    {
+        return new ScheduleSummary
+        {
+            TaskCount = schedule.Blocks.Count(block => block.Type == ScheduleBlockType.Task),
+            FixedEventCount = schedule.Blocks.Count(block => block.Type == ScheduleBlockType.Fixed),
+            TaskMinutes = schedule.Blocks.Where(block => block.Type == ScheduleBlockType.Task).Sum(block => block.DurationMin),
+            FixedMinutes = schedule.Blocks.Where(block => block.Type == ScheduleBlockType.Fixed).Sum(block => block.DurationMin),
+            UnscheduledCount = schedule.Unscheduled.Count,
+            IssueCount = schedule.Issues.Count
+        };
     }
 
     private void ApplyScheduleReviewScenario(ScheduleViewMode viewMode, bool panelCollapsed, bool sidebarCollapsed, bool selectBlock, bool markComplete)
@@ -570,6 +673,105 @@ public sealed class MainWindow : Window
         RenderActivePage();
     }
 
+    private void ApplyChatWarningsReviewScenario()
+    {
+        _activePage = "Chat";
+        _state.Preferences.StartupPage = "Chat";
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+
+        _focusDate = new DateOnly(2026, 6, 6);
+        var reviewSchedule = new DaySchedule
+        {
+            Date = _focusDate,
+            Blocks =
+            [
+                new ScheduleBlock
+                {
+                    RuntimeId = "review-chat-code",
+                    Type = ScheduleBlockType.Task,
+                    Title = "写代码",
+                    Category = "code",
+                    StartMin = 20 * 60,
+                    EndMin = 21 * 60,
+                    Editable = true
+                },
+                new ScheduleBlock
+                {
+                    RuntimeId = "review-chat-meal",
+                    Type = ScheduleBlockType.Task,
+                    Title = "晚饭",
+                    Category = "life",
+                    StartMin = 18 * 60,
+                    EndMin = 19 * 60,
+                    Editable = true
+                }
+            ]
+        };
+        reviewSchedule.Summary = new ScheduleSummary
+        {
+            TaskCount = reviewSchedule.Blocks.Count(block => block.Type == ScheduleBlockType.Task),
+            FixedEventCount = reviewSchedule.Blocks.Count(block => block.Type == ScheduleBlockType.Fixed),
+            TaskMinutes = reviewSchedule.Blocks.Where(block => block.Type == ScheduleBlockType.Task).Sum(block => block.DurationMin),
+            FixedMinutes = reviewSchedule.Blocks.Where(block => block.Type == ScheduleBlockType.Fixed).Sum(block => block.DurationMin),
+            UnscheduledCount = reviewSchedule.Unscheduled.Count,
+            IssueCount = reviewSchedule.Issues.Count
+        };
+        _state.DayOverrides[DateKey(_focusDate)] = reviewSchedule.Clone();
+        RebuildSchedules();
+
+        _chatMessages.Clear();
+        _chatMessages.Add(new AiChatMessage
+        {
+            Role = "user",
+            Content = "今晚七点半复习数学，大概九点去居酒屋，把写代码往后挪一点。"
+        });
+        _chatMessages.Add(new AiChatMessage
+        {
+            Role = "assistant",
+            Content = "我整理了这些改动，请先核对时间。"
+        });
+
+        _pendingActions.Clear();
+        _pendingActions.AddRange(
+        [
+            new ScheduleAction
+            {
+                Type = "add_task_block",
+                Title = "复习数学",
+                Start = "19:30",
+                Category = "study",
+                TimeConfidence = "inferred_duration",
+                NeedsConfirmation = true,
+                Assumptions = ["用户没有明确结束时间"]
+            },
+            new ScheduleAction
+            {
+                Type = "add_task_block",
+                Title = "居酒屋",
+                Start = "21:00",
+                DurationMinutes = 90,
+                Category = "social",
+                TimeConfidence = "approximate",
+                Assumptions = ["“大概九点”按 21:00 处理"]
+            },
+            new ScheduleAction
+            {
+                Type = "move_block",
+                MatchTitle = "写代码",
+                Start = "20:30",
+                NeedsConfirmation = true,
+                Assumptions = ["“往后挪一点”按 30 分钟处理"]
+            }
+        ]);
+
+        var warningActionCount = CountWarningActions(AggregateActionPreview(BuildActionPreviewGroups()));
+        SetStatus(BuildAiActionStatus(_pendingActions.Count, targetDate: null, warningActionCount), error: false);
+        RenderActivePage();
+    }
+
     private void EnsureMonthReviewOverflow()
     {
         var schedule = BuildScheduleForDate(_focusDate).Clone();
@@ -621,9 +823,16 @@ public sealed class MainWindow : Window
             .Where(IsScheduleTutorialText)
             .Distinct()
             .ToList();
+        var redundantStatusHintTexts = visibleTexts
+            .Where(IsRedundantStatusHintText)
+            .Distinct()
+            .ToList();
         var iconAlignmentRows = BuildIconButtonAlignmentRows(visibleControls.OfType<Button>());
         var scrollViewers = visibleControls.OfType<ScrollViewer>().ToList();
         var zeroSized = visibleControls.Count(control => control.Bounds.Width <= 0 || control.Bounds.Height <= 0);
+        var hasExactSaveButton = buttonLabels.Contains("保存");
+        var hasScheduleReminderButton = _activePage == "Schedule" &&
+            buttonLabels.Any(label => label is "提醒" or "复制提醒" or "复制今日提醒");
         var report = new StringBuilder();
 
         report.AppendLine("AI 日程助手 internal UI audit");
@@ -634,6 +843,7 @@ public sealed class MainWindow : Window
         report.AppendLine($"sidebar: {(_sidebarCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
+        report.AppendLine($"global_topbar_visible: {_topbarHost?.IsVisible == true}");
         report.AppendLine($"visible_controls: {visibleControls.Count}");
         report.AppendLine($"zero_sized_visible_controls: {zeroSized}");
         if (zeroSized > 0)
@@ -648,11 +858,15 @@ public sealed class MainWindow : Window
             report.AppendLine($"zero_sized_types: {string.Join(", ", zeroSizedTypes)}");
         }
         report.AppendLine($"buttons: {string.Join(" | ", buttonLabels)}");
+        report.AppendLine($"has_exact_save_button: {hasExactSaveButton}");
+        report.AppendLine($"has_schedule_reminder_button: {hasScheduleReminderButton}");
         report.AppendLine($"has_calendar_toggle: {buttonLabels.Contains("收起日历") || buttonLabels.Contains("展开日历")}");
         report.AppendLine($"has_legacy_schedule_text: {legacyScheduleTexts.Count > 0}");
         report.AppendLine($"legacy_schedule_texts: {string.Join(" | ", legacyScheduleTexts)}");
         report.AppendLine($"has_schedule_tutorial_text: {tutorialScheduleTexts.Count > 0}");
         report.AppendLine($"schedule_tutorial_texts: {string.Join(" | ", tutorialScheduleTexts)}");
+        report.AppendLine($"has_redundant_status_hint_text: {redundantStatusHintTexts.Count > 0}");
+        report.AppendLine($"redundant_status_hint_texts: {string.Join(" | ", redundantStatusHintTexts)}");
         report.AppendLine("icon_button_alignment:");
         foreach (var row in iconAlignmentRows)
         {
@@ -671,8 +885,127 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildChatAuditRows(visibleTexts, buttonLabels))
+        {
+            report.AppendLine(row);
+        }
+        foreach (var row in BuildScheduleLayoutAuditRows(visibleControls, visibleTexts, buttonLabels))
+        {
+            report.AppendLine(row);
+        }
+        foreach (var row in BuildOverviewAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildScheduleLayoutAuditRows(IReadOnlyList<Control> visibleControls, IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
+    {
+        if (_activePage != "Schedule") return [];
+
+        var main = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-main"));
+        var top = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-top"));
+        var toolbar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-toolbar"));
+        var calendar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-calendar"));
+        var topHeight = MeasureVerticalDistance(main, calendar);
+        if (double.IsNaN(topHeight) && top is not null)
+        {
+            topHeight = top.Bounds.Height;
+        }
+
+        var hasTransientTopStrip = _selectedRuntimeIds.Count > 0 || GetScheduleIssuesForDisplay().Count > 0;
+        var compactLimit = hasTransientTopStrip ? 132d : 54d;
+        var summaryChipsInScheduleMain = main is null
+            ? new List<string>()
+            : main.GetVisualDescendants()
+                .OfType<Control>()
+                .Where(control => control.Tag is string tag && tag.StartsWith("summary-chip:", StringComparison.OrdinalIgnoreCase))
+                .Select(control => ((string)control.Tag!)[13..])
+                .Distinct()
+                .ToList();
+        var hasReminderButton = buttonLabels.Any(label => label is "提醒" or "复制提醒" or "复制今日提醒");
+        var explanatoryTexts = visibleTexts
+            .Concat(buttonLabels)
+            .Where(IsScheduleLeftPanelExplanatoryText)
+            .Distinct()
+            .ToList();
+
+        return
+        [
+            $"schedule_global_topbar_visible: {_topbarHost?.IsVisible == true}",
+            $"schedule_toolbar_present: {toolbar is not null}",
+            $"schedule_toolbar_height: {(toolbar?.Bounds.Height ?? 0):0.##}",
+            $"schedule_top_stack_height: {(top?.Bounds.Height ?? 0):0.##}",
+            $"schedule_top_non_calendar_height: {topHeight:0.##}",
+            $"schedule_top_compact_limit: {compactLimit:0.##}",
+            $"schedule_top_compact_pass: {!double.IsNaN(topHeight) && topHeight <= compactLimit}",
+            $"schedule_summary_strip_visible: {summaryChipsInScheduleMain.Count > 0}",
+            $"schedule_summary_chips_in_main: {string.Join(" | ", summaryChipsInScheduleMain)}",
+            $"schedule_exact_save_button_visible: {buttonLabels.Contains("保存")}",
+            $"schedule_reminder_button_visible: {hasReminderButton}",
+            $"schedule_left_panel_explanatory_text_visible: {explanatoryTexts.Count > 0}",
+            $"schedule_left_panel_explanatory_texts: {string.Join(" | ", explanatoryTexts)}"
+        ];
+    }
+
+    private IReadOnlyList<string> BuildOverviewAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Overview") return [];
+
+        var summary = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-day-summary-strip"));
+        var completionTrack = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-completion-track"));
+        var completionFill = visibleControls.FirstOrDefault(control => Equals(control.Tag, "overview-completion-fill"));
+        var todayTitle = visibleControls
+            .OfType<TextBlock>()
+            .FirstOrDefault(text => string.Equals(text.Text, "今天", StringComparison.Ordinal) && text.FontSize >= 20);
+        var chips = summary is null
+            ? new List<string>()
+            : summary.GetVisualDescendants()
+                .OfType<Control>()
+                .Where(control => control.Tag is string tag && tag.StartsWith("summary-chip:", StringComparison.OrdinalIgnoreCase))
+                .Select(control => ((string)control.Tag!)[13..])
+                .Distinct()
+                .ToList();
+        var summaryPoint = summary?.TranslatePoint(new Point(0, 0), this);
+        var titlePoint = todayTitle?.TranslatePoint(new Point(0, 0), this);
+        var nearToday = summaryPoint is not null &&
+            titlePoint is not null &&
+            Math.Abs(summaryPoint.Value.Y + (summary?.Bounds.Height ?? 0) / 2 - titlePoint.Value.Y - (todayTitle?.Bounds.Height ?? 0) / 2) <= 18;
+        var completionFillRatio = completionTrack is null || completionTrack.Bounds.Width <= 0
+            ? double.NaN
+            : (completionFill?.Bounds.Width ?? 0) / completionTrack.Bounds.Width;
+        var completion = GetCompletionStats(_daySchedule);
+        var completedFixedCount = _daySchedule.Blocks.Count(block =>
+            block.Type == ScheduleBlockType.Fixed &&
+            _state.Completed.TryGetValue(block.RuntimeId, out var done) &&
+            done);
+        var taskCount = _daySchedule.Blocks.Count(block => block.Type == ScheduleBlockType.Task);
+
+        return
+        [
+            $"overview_day_summary_strip_visible: {summary is not null}",
+            $"overview_day_summary_chips: {string.Join(" | ", chips)}",
+            $"overview_day_summary_near_today: {nearToday}",
+            $"overview_completion_track_width: {(completionTrack?.Bounds.Width ?? 0):0.##}",
+            $"overview_completion_fill_width: {(completionFill?.Bounds.Width ?? 0):0.##}",
+            $"overview_completion_fill_ratio: {completionFillRatio:0.###}",
+            $"overview_completion_percent: {completion.Percent}",
+            $"overview_completion_done: {completion.Done}",
+            $"overview_completion_total: {completion.Total}",
+            $"overview_completion_completed_fixed_count: {completedFixedCount}",
+            $"overview_completion_fixed_ignored: {completedFixedCount > 0 && completion.Total == taskCount}"
+        ];
+    }
+
+    private double MeasureVerticalDistance(Control? from, Control? to)
+    {
+        if (from is null || to is null) return double.NaN;
+
+        var fromPoint = from.TranslatePoint(new Point(0, 0), this);
+        var toPoint = to.TranslatePoint(new Point(0, 0), this);
+        return fromPoint is null || toPoint is null ? double.NaN : toPoint.Value.Y - fromPoint.Value.Y;
     }
 
     private IReadOnlyList<string> BuildWeekHeaderAuditRows(IReadOnlyList<Control> visibleControls)
@@ -745,6 +1078,43 @@ public sealed class MainWindow : Window
         ];
     }
 
+    private IReadOnlyList<string> BuildChatAuditRows(IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
+    {
+        if (_activePage != "Chat") return [];
+
+        var warningTexts = visibleTexts
+            .Where(IsAiWarningPreviewText)
+            .Distinct()
+            .Take(16)
+            .ToList();
+        var applyButton = buttonLabels.FirstOrDefault(text => text.Contains("应用", StringComparison.OrdinalIgnoreCase)) ?? "";
+        var aggregatePreview = _pendingActions.Count > 0
+            ? AggregateActionPreview(BuildActionPreviewGroups())
+            : new ScheduleActionPreview();
+
+        return
+        [
+            $"chat_pending_actions: {_pendingActions.Count}",
+            $"chat_preview_applicable_count: {aggregatePreview.ApplicableCount}",
+            $"chat_preview_warning_actions: {CountWarningActions(aggregatePreview)}",
+            $"chat_warning_texts_visible: {warningTexts.Count}",
+            $"chat_warning_texts: {string.Join(" | ", warningTexts)}",
+            $"chat_apply_button: {applyButton}"
+        ];
+    }
+
+    private static bool IsAiWarningPreviewText(string text)
+    {
+        return text.Contains("需核对", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("默认 30 分钟", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("时长未明确", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("需要确认", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("时间推断", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("时间置信度", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("置信度", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("AI 假设", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsScheduleTutorialText(string text)
     {
         return text.Contains("拖动空白", StringComparison.OrdinalIgnoreCase) ||
@@ -753,6 +1123,29 @@ public sealed class MainWindow : Window
             text.Contains("单击日期查看", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("拖动事件", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("快捷键", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsScheduleLeftPanelExplanatoryText(string text)
+    {
+        return text.Contains("快捷操作", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("当天完成", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("未选中日程", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("可以直接新建", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("让 AI 帮你安排", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("点击“打开”查看全部", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("今天没有剩余日程", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("当天没有日程。", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("当前时间", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsRedundantStatusHintText(string text)
+    {
+        return text.Contains("已切换到", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("已保存偏好", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("已自动保存", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("正在自动保存", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("完成状态会自动保存", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("本地数据已启用", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ControlText(object? content)
@@ -1061,6 +1454,21 @@ public sealed class MainWindow : Window
         }
 
         UpdateNavigationVisualState();
+        var schedulePage = _activePage == "Schedule";
+        if (_topbarHost is not null)
+        {
+            _topbarHost.IsVisible = !schedulePage;
+        }
+        _topbarTitle.IsVisible = !schedulePage;
+        if (_undoButton is not null)
+        {
+            _undoButton.IsVisible = !schedulePage;
+        }
+
+        if (_contentHost is not null)
+        {
+            _contentHost.Padding = schedulePage ? new Thickness(16, 12, 16, 16) : new Thickness(24);
+        }
 
         _topbarTitle.Text = _activePage switch
         {
@@ -1181,7 +1589,7 @@ public sealed class MainWindow : Window
         var visibleBlocks = _daySchedule.Blocks.Where(IsVisibleBlock).OrderBy(block => block.StartMin).ToList();
 
         var page = PageStack();
-        page.Children.Add(Header("今天", $"{_focusDate:yyyy-MM-dd} 周{WeekdayText(_focusDate)}"));
+        page.Children.Add(RenderOverviewHeader());
 
         var grid = new Grid
         {
@@ -1198,13 +1606,34 @@ public sealed class MainWindow : Window
         var side = new StackPanel { Spacing = 12 };
         side.Children.Add(ProgressCard(completion));
         side.Children.Add(RenderOverviewDayHealth(visibleBlocks));
-        side.Children.Add(RenderOverviewStats(completion));
         side.Children.Add(RenderOverviewActions());
         Grid.SetColumn(side, 1);
         grid.Children.Add(side);
 
         page.Children.Add(grid);
         return Scroll(page);
+    }
+
+    private Control RenderOverviewHeader()
+    {
+        var grid = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+            ColumnSpacing = 16
+        };
+        var title = new StackPanel { Spacing = 4 };
+        title.Children.Add(Text("今天", 22, "#111827", FontWeight.SemiBold));
+        title.Children.Add(Text($"{_focusDate:yyyy-MM-dd} 周{WeekdayText(_focusDate)}", 13, "#64748b"));
+        Grid.SetColumn(title, 0);
+        grid.Children.Add(title);
+
+        var summary = RenderScheduleSummaryStrip(includeProblemChip: false);
+        summary.Tag = "overview-day-summary-strip";
+        summary.HorizontalAlignment = HorizontalAlignment.Right;
+        summary.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(summary, 1);
+        grid.Children.Add(summary);
+        return grid;
     }
 
     private Control RenderOverviewHero(IReadOnlyList<ScheduleBlock> visibleBlocks)
@@ -1291,6 +1720,7 @@ public sealed class MainWindow : Window
 
     private Control RenderOverviewTimelineRow(ScheduleBlock block)
     {
+        var completable = IsCompletableBlock(block);
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(block);
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("78,Auto,*,Auto"), ColumnSpacing = 10 };
@@ -1310,15 +1740,18 @@ public sealed class MainWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right,
             Spacing = 6
         };
-        var complete = Button(done ? "取消" : "完成", async (_, _) => await ToggleBlockCompleteAsync(block), secondary: true);
         var edit = Button("改", async (_, _) => await EditScheduleBlockAsync(block), secondary: true);
-        ToolTip.SetTip(complete, done ? "取消完成" : "标记完成");
         ToolTip.SetTip(edit, "编辑日程");
-        complete.Padding = new Thickness(8, 4);
         edit.Padding = new Thickness(8, 4);
-        complete.MinHeight = 28;
         edit.MinHeight = 28;
-        actions.Children.Add(complete);
+        if (completable)
+        {
+            var complete = Button(done ? "取消" : "完成", async (_, _) => await ToggleBlockCompleteAsync(block), secondary: true);
+            ToolTip.SetTip(complete, done ? "取消完成" : "标记完成");
+            complete.Padding = new Thickness(8, 4);
+            complete.MinHeight = 28;
+            actions.Children.Add(complete);
+        }
         actions.Children.Add(edit);
         Grid.SetColumn(time, 0);
         Grid.SetColumn(marker, 1);
@@ -1413,16 +1846,6 @@ public sealed class MainWindow : Window
         }
 
         return (bestStart, bestEnd, Math.Max(0, bestEnd - bestStart));
-    }
-
-    private Control RenderOverviewStats(CompletionStats completion)
-    {
-        var grid = new UniformGrid { Columns = 2 };
-        grid.Children.Add(StatCard("已完成", $"{completion.Done}/{completion.Total}"));
-        grid.Children.Add(StatCard("问题", GetScheduleIssuesForDisplay().Count.ToString()));
-        grid.Children.Add(StatCard("固定分钟", _daySchedule.Summary.FixedMinutes.ToString()));
-        grid.Children.Add(StatCard("任务分钟", _daySchedule.Summary.TaskMinutes.ToString()));
-        return grid;
     }
 
     private Control RenderOverviewActions()
@@ -1805,10 +2228,11 @@ public sealed class MainWindow : Window
             }
 
             _pendingActions.AddRange(result.Actions);
+            var warningActionCount = result.Actions.Count > 0
+                ? CountWarningActions(AggregateActionPreview(BuildActionPreviewGroups()))
+                : 0;
             SetStatus(result.Actions.Count > 0
-                ? targetDate is null
-                    ? $"AI 提取了 {result.Actions.Count} 条改动"
-                    : $"AI 提取了 {result.Actions.Count} 条改动，已切换到 {targetDate:yyyy-MM-dd} 预览"
+                ? BuildAiActionStatus(result.Actions.Count, targetDate, warningActionCount)
                 : "AI 没有提取可直接应用的改动");
         }
         catch (Exception ex)
@@ -1833,9 +2257,10 @@ public sealed class MainWindow : Window
         var previewGroups = BuildActionPreviewGroups();
         var aggregatePreview = AggregateActionPreview(previewGroups);
         var affectedDates = previewGroups.Select(group => group.Date).Distinct().ToList();
+        var warningActionCount = CountWarningActions(aggregatePreview);
 
         var root = new StackPanel { Spacing = 8 };
-        root.Children.Add(RenderActionPreviewHeader(_pendingActions.Count, affectedDates, aggregatePreview.ApplicableCount));
+        root.Children.Add(RenderActionPreviewHeader(_pendingActions.Count, affectedDates, aggregatePreview.ApplicableCount, warningActionCount));
         root.Children.Add(RenderActionPreviewSummary(aggregatePreview));
 
         var displayIndex = 1;
@@ -1850,12 +2275,17 @@ public sealed class MainWindow : Window
             {
                 var (label, color, background, border) = ActionStatusStyle(item.Status);
                 var resultRow = new StackPanel { Spacing = 4 };
-                resultRow.Children.Add(Text($"{displayIndex}. {label}", 12, color, FontWeight.SemiBold));
-                resultRow.Children.Add(Text(item.Message, 12, "#334155"));
+                resultRow.Children.Add(RenderActionStatusLine(displayIndex, label, color, HasActionWarnings(item)));
+                resultRow.Children.Add(Text(ActionDisplayMessage(item), 12, "#334155"));
                 var detail = ActionResultDetail(item);
                 if (!string.IsNullOrWhiteSpace(detail))
                 {
                     resultRow.Children.Add(Text(detail, 11, "#64748b", FontWeight.SemiBold));
+                }
+                var warningPanel = RenderActionWarnings(item.Warnings);
+                if (warningPanel is not null)
+                {
+                    resultRow.Children.Add(warningPanel);
                 }
                 root.Children.Add(new Border
                 {
@@ -1871,7 +2301,7 @@ public sealed class MainWindow : Window
         }
 
         var actionRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        var applyButton = Button(ActionApplyButtonText(aggregatePreview.ApplicableCount, affectedDates.Count), (_, _) => ApplyPendingActions());
+        var applyButton = Button(ActionApplyButtonText(aggregatePreview.ApplicableCount, affectedDates.Count, warningActionCount), (_, _) => ApplyPendingActions());
         applyButton.IsEnabled = aggregatePreview.ApplicableCount > 0;
         actionRow.Children.Add(applyButton);
         actionRow.Children.Add(Button("丢弃", (_, _) =>
@@ -1896,7 +2326,7 @@ public sealed class MainWindow : Window
         };
     }
 
-    private static Control RenderActionPreviewHeader(int actionCount, IReadOnlyList<DateOnly> affectedDates, int applicableCount)
+    private static Control RenderActionPreviewHeader(int actionCount, IReadOnlyList<DateOnly> affectedDates, int applicableCount, int warningActionCount)
     {
         var root = new StackPanel { Spacing = 5 };
         var titleRow = new Grid
@@ -1905,19 +2335,19 @@ public sealed class MainWindow : Window
             ColumnSpacing = 8
         };
         var title = Text($"{actionCount} 条日程改动待确认", 15, "#111827", FontWeight.SemiBold);
-        var badge = new Border
+        var badges = new WrapPanel { Orientation = Orientation.Horizontal };
+        badges.Children.Add(ActionPreviewBadge($"{applicableCount} 可应用",
+            applicableCount > 0 ? "#166534" : "#64748b",
+            applicableCount > 0 ? "#f0fdf4" : "#f8fafc",
+            applicableCount > 0 ? "#bbf7d0" : "#e2e8f0"));
+        if (warningActionCount > 0)
         {
-            Background = Brush(applicableCount > 0 ? "#f0fdf4" : "#f8fafc"),
-            BorderBrush = Brush(applicableCount > 0 ? "#bbf7d0" : "#e2e8f0"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(8, 4),
-            Child = Text($"{applicableCount} 可应用", 11, applicableCount > 0 ? "#166534" : "#64748b", FontWeight.SemiBold)
-        };
+            badges.Children.Add(ActionPreviewBadge($"{warningActionCount} 需核对", "#92400e", "#fffbeb", "#fde68a"));
+        }
         Grid.SetColumn(title, 0);
-        Grid.SetColumn(badge, 1);
+        Grid.SetColumn(badges, 1);
         titleRow.Children.Add(title);
-        titleRow.Children.Add(badge);
+        titleRow.Children.Add(badges);
         root.Children.Add(titleRow);
 
         if (affectedDates.Count > 0)
@@ -1952,7 +2382,9 @@ public sealed class MainWindow : Window
     {
         var conflictCount = group.Preview.Results.Count(item => item.Status == "conflict");
         var skippedCount = group.Preview.Results.Count(item => item.Status == "invalid" || item.Status == "skipped");
+        var warningActionCount = CountWarningActions(group.Preview);
         var detailParts = new List<string> { $"{group.Preview.ApplicableCount}/{group.Preview.Results.Count} 可应用" };
+        if (warningActionCount > 0) detailParts.Add($"{warningActionCount} 需核对");
         if (conflictCount > 0) detailParts.Add($"{conflictCount} 冲突");
         if (skippedCount > 0) detailParts.Add($"{skippedCount} 跳过");
 
@@ -2002,6 +2434,7 @@ public sealed class MainWindow : Window
         var changedCount = 0;
         var changedDates = new List<DateOnly>();
         var issues = new List<ScheduleIssue>();
+        var appliedWarningCount = 0;
 
         foreach (var group in groups)
         {
@@ -2010,6 +2443,7 @@ public sealed class MainWindow : Window
             if (result.ChangedCount <= 0) continue;
 
             changedCount += result.ChangedCount;
+            appliedWarningCount += result.Results.Count(item => item.Status == "applied" && HasActionWarnings(item));
             changedDates.Add(group.Date);
             var nextSchedule = result.NextSchedule.Clone();
             _state.DayOverrides[DateKey(group.Date)] = nextSchedule.Clone();
@@ -2034,7 +2468,8 @@ public sealed class MainWindow : Window
 
         var dateCount = changedDates.Distinct().Count();
         var issueCount = issues.Count;
-        var suffix = issueCount > 0 ? $"；发现 {issueCount} 个时间问题" : "";
+        var reviewSuffix = appliedWarningCount > 0 ? $"；{appliedWarningCount} 条需核对" : "";
+        var suffix = $"{reviewSuffix}{(issueCount > 0 ? $"；发现 {issueCount} 个时间问题" : "")}";
         var hasError = issues.Any(issue => issue.Level == ScheduleIssueLevel.Error);
         SetStatus($"已应用 {changedCount} 条 AI 改动，正在自动保存{suffix}", error: hasError);
         QueueStateAutosave($"已应用 {changedCount} 条 AI 改动，覆盖 {dateCount} 天并已自动保存{suffix}", hasError);
@@ -2053,11 +2488,19 @@ public sealed class MainWindow : Window
         return $"将影响 {dates.Count} 天：{string.Join("、", shown)}{suffix}";
     }
 
-    private static string ActionApplyButtonText(int applicableCount, int affectedDateCount)
+    private static string BuildAiActionStatus(int actionCount, DateOnly? targetDate, int warningActionCount)
     {
+        var target = targetDate is null ? "" : $"，已切换到 {targetDate:yyyy-MM-dd} 预览";
+        var warning = warningActionCount > 0 ? $"，其中 {warningActionCount} 条需核对" : "";
+        return $"AI 提取了 {actionCount} 条改动{target}{warning}";
+    }
+
+    private static string ActionApplyButtonText(int applicableCount, int affectedDateCount, int warningActionCount)
+    {
+        var verb = warningActionCount > 0 ? "确认并应用" : "应用";
         return affectedDateCount > 1
-            ? $"应用 {applicableCount} 项 / {affectedDateCount} 天"
-            : $"应用 {applicableCount} 项";
+            ? $"{verb} {applicableCount} 项 / {affectedDateCount} 天"
+            : $"{verb} {applicableCount} 项";
     }
 
     private sealed record ActionPreviewDateGroup(DateOnly Date, ScheduleActionPreview Preview);
@@ -2066,8 +2509,10 @@ public sealed class MainWindow : Window
     {
         var conflictCount = preview.Results.Count(item => item.Status == "conflict");
         var invalidCount = preview.Results.Count(item => item.Status == "invalid" || item.Status == "skipped");
-        var grid = new UniformGrid { Columns = 3 };
+        var warningActionCount = CountWarningActions(preview);
+        var grid = new UniformGrid { Columns = 2 };
         grid.Children.Add(ActionSummaryTile("可应用", preview.ApplicableCount.ToString(), "#166534", "#f0fdf4", "#bbf7d0"));
+        grid.Children.Add(ActionSummaryTile("需核对", warningActionCount.ToString(), "#92400e", "#fffbeb", "#fde68a"));
         grid.Children.Add(ActionSummaryTile("冲突", conflictCount.ToString(), "#991b1b", "#fef2f2", "#fecaca"));
         grid.Children.Add(ActionSummaryTile("跳过", invalidCount.ToString(), "#92400e", "#fffbeb", "#fde68a"));
         return grid;
@@ -2085,9 +2530,181 @@ public sealed class MainWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
             Padding = new Thickness(9),
-            Margin = new Thickness(0, 0, 6, 0),
+            Margin = new Thickness(0, 0, 6, 6),
             Child = root
         };
+    }
+
+    private static Control ActionPreviewBadge(string text, string color, string background, string border)
+    {
+        return new Border
+        {
+            Background = Brush(background),
+            BorderBrush = Brush(border),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(8, 4),
+            Margin = new Thickness(4, 0, 0, 0),
+            Child = Text(text, 11, color, FontWeight.SemiBold)
+        };
+    }
+
+    private static int CountWarningActions(ScheduleActionPreview preview)
+    {
+        return preview.Results.Count(HasActionWarnings);
+    }
+
+    private static bool HasActionWarnings(ScheduleActionResult result)
+    {
+        return result.Warnings.Any(warning => !string.IsNullOrWhiteSpace(warning));
+    }
+
+    private static IReadOnlyList<string> DistinctActionWarnings(IEnumerable<string> warnings)
+    {
+        return warnings
+            .Select(warning => (warning ?? "").Trim())
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .Distinct()
+            .ToList();
+    }
+
+    private static Control RenderActionStatusLine(int displayIndex, string label, string color, bool hasWarnings)
+    {
+        var row = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            ColumnSpacing = 8
+        };
+        var status = Text($"{displayIndex}. {label}", 12, color, FontWeight.SemiBold);
+        Grid.SetColumn(status, 0);
+        row.Children.Add(status);
+
+        if (hasWarnings)
+        {
+            var chip = ActionWarningChip("需核对");
+            Grid.SetColumn(chip, 1);
+            row.Children.Add(chip);
+        }
+
+        return row;
+    }
+
+    private static Control? RenderActionWarnings(IEnumerable<string> warnings)
+    {
+        var visibleWarnings = DistinctActionWarnings(warnings);
+        if (visibleWarnings.Count == 0) return null;
+
+        var root = new StackPanel { Spacing = 5 };
+        var chips = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var label in ActionWarningLabels(visibleWarnings))
+        {
+            chips.Children.Add(ActionWarningChip(label));
+        }
+        root.Children.Add(chips);
+
+        foreach (var warning in visibleWarnings.Take(3))
+        {
+            root.Children.Add(Text(ActionWarningBodyText(warning), 11, "#78350f"));
+        }
+
+        if (visibleWarnings.Count > 3)
+        {
+            root.Children.Add(Text($"还有 {visibleWarnings.Count - 3} 条需核对", 11, "#92400e", FontWeight.SemiBold));
+        }
+
+        return new Border
+        {
+            Background = Brush("#fffbeb"),
+            BorderBrush = Brush("#fde68a"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8),
+            Margin = new Thickness(0, 3, 0, 0),
+            Child = root
+        };
+    }
+
+    private static Control ActionWarningChip(string label)
+    {
+        return new Border
+        {
+            Background = Brush("#fff7ed"),
+            BorderBrush = Brush("#fed7aa"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(7, 3),
+            Margin = new Thickness(0, 0, 5, 3),
+            Child = Text(label, 10, "#9a3412", FontWeight.SemiBold)
+        };
+    }
+
+    private static IReadOnlyList<string> ActionWarningLabels(IReadOnlyList<string> warnings)
+    {
+        var labels = new List<string>();
+        foreach (var warning in warnings)
+        {
+            if (warning.Contains("需要确认", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "需要确认");
+            }
+
+            if (warning.Contains("暂按 30 分钟", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "默认 30 分钟");
+            }
+            else if (warning.Contains("时长未明确", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "默认时长");
+            }
+
+            if (warning.Contains("置信度", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "时间置信度");
+            }
+            else if (warning.Contains("推断", StringComparison.OrdinalIgnoreCase) ||
+                warning.Contains("inferred", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "时间推断");
+            }
+
+            if (warning.Contains("AI 假设", StringComparison.OrdinalIgnoreCase))
+            {
+                AddWarningLabel(labels, "AI 假设");
+            }
+        }
+
+        if (labels.Count == 0)
+        {
+            labels.Add("需核对");
+        }
+
+        return labels;
+    }
+
+    private static void AddWarningLabel(ICollection<string> labels, string label)
+    {
+        if (!labels.Contains(label))
+        {
+            labels.Add(label);
+        }
+    }
+
+    private static string ActionWarningBodyText(string warning)
+    {
+        return warning.StartsWith("AI 标记此改动", StringComparison.OrdinalIgnoreCase)
+            ? warning.Replace("AI 标记此改动", "此改动", StringComparison.OrdinalIgnoreCase)
+            : warning;
+    }
+
+    private static string ActionDisplayMessage(ScheduleActionResult result)
+    {
+        var message = result.Message;
+        foreach (var warning in DistinctActionWarnings(result.Warnings))
+        {
+            message = message.Replace($"；{warning}", "", StringComparison.Ordinal);
+        }
+
+        return message.Trim();
     }
 
     private static string ActionResultDetail(ScheduleActionResult result)
@@ -2149,20 +2766,21 @@ public sealed class MainWindow : Window
 
         var main = new Grid
         {
-            RowDefinitions = new RowDefinitions("Auto,Auto,Auto,*"),
-            RowSpacing = 12
+            RowDefinitions = new RowDefinitions("Auto,*"),
+            RowSpacing = 6,
+            Tag = "schedule-main"
         };
 
+        var topStack = new StackPanel
+        {
+            Spacing = 6,
+            Tag = "schedule-top"
+        };
         var toolbar = RenderScheduleToolbar();
-        Grid.SetRow(toolbar, 0);
-        main.Children.Add(toolbar);
-
-        var summary = RenderScheduleSummaryStrip();
-        Grid.SetRow(summary, 1);
-        main.Children.Add(summary);
+        topStack.Children.Add(toolbar);
 
         var statusStack = new StackPanel { Spacing = 8 };
-        if (_selectedRuntimeIds.Count > 0)
+        if (_selectedRuntimeIds.Count > 0 && panelCollapsed)
         {
             statusStack.Children.Add(RenderSelectedActionBar());
         }
@@ -2175,9 +2793,10 @@ public sealed class MainWindow : Window
 
         if (statusStack.Children.Count > 0)
         {
-            Grid.SetRow(statusStack, 2);
-            main.Children.Add(statusStack);
+            topStack.Children.Add(statusStack);
         }
+        Grid.SetRow(topStack, 0);
+        main.Children.Add(topStack);
 
         var calendar = _scheduleView switch
         {
@@ -2185,8 +2804,13 @@ public sealed class MainWindow : Window
             ScheduleViewMode.Week => RenderWeekCalendar(),
             _ => RenderDayCalendar()
         };
-        Grid.SetRow(calendar, 3);
-        main.Children.Add(calendar);
+        var calendarHost = new Border
+        {
+            Tag = "schedule-calendar",
+            Child = calendar
+        };
+        Grid.SetRow(calendarHost, 1);
+        main.Children.Add(calendarHost);
         Grid.SetColumn(main, 1);
         root.Children.Add(main);
         return root;
@@ -2285,7 +2909,7 @@ public sealed class MainWindow : Window
         actions.Children.Add(control);
     }
 
-    private Control RenderScheduleSummaryStrip()
+    private WrapPanel RenderScheduleSummaryStrip(bool includeProblemChip)
     {
         var visible = _daySchedule.Blocks.Where(IsVisibleBlock).ToList();
         var completion = GetCompletionStats(_daySchedule);
@@ -2296,7 +2920,11 @@ public sealed class MainWindow : Window
         grid.Children.Add(ScheduleSummaryChip("固定", visible.Count(block => block.Type == ScheduleBlockType.Fixed).ToString(), "#0f766e", "#f0fdfa", "#99f6e4"));
         grid.Children.Add(ScheduleSummaryChip("任务", visible.Count(block => block.Type == ScheduleBlockType.Task).ToString(), "#7c3aed", "#f5f3ff", "#ddd6fe"));
         grid.Children.Add(ScheduleSummaryChip("完成", $"{completion.Percent}%", "#166534", "#f0fdf4", "#bbf7d0"));
-        grid.Children.Add(ScheduleSummaryChip(selected > 0 ? "已选" : "问题", selected > 0 ? selected.ToString() : issues.Count.ToString(), selected > 0 || issues.Count == 0 ? "#334155" : "#991b1b", selected > 0 || issues.Count == 0 ? "#f8fafc" : "#fef2f2", selected > 0 || issues.Count == 0 ? "#e2e8f0" : "#fecaca"));
+        if (includeProblemChip)
+        {
+            grid.Children.Add(ScheduleSummaryChip(selected > 0 ? "已选" : "问题", selected > 0 ? selected.ToString() : issues.Count.ToString(), selected > 0 || issues.Count == 0 ? "#334155" : "#991b1b", selected > 0 || issues.Count == 0 ? "#f8fafc" : "#fef2f2", selected > 0 || issues.Count == 0 ? "#e2e8f0" : "#fecaca"));
+        }
+
         return grid;
     }
 
@@ -2322,6 +2950,7 @@ public sealed class MainWindow : Window
             Padding = new Thickness(9, 6),
             Margin = new Thickness(0, 0, 6, 6),
             MinWidth = 90,
+            Tag = $"summary-chip:{label}",
             Child = row
         };
     }
@@ -2329,7 +2958,7 @@ public sealed class MainWindow : Window
     private Control RenderScheduleToolbar()
     {
         var viewportWidth = ResolveScheduleCalendarViewportWidth();
-        var singleLine = viewportWidth >= 880;
+        var singleLine = viewportWidth >= 600;
 
         var nav = new WrapPanel
         {
@@ -2349,12 +2978,11 @@ public sealed class MainWindow : Window
 
         var titleStack = new StackPanel
         {
-            Spacing = 1,
+            Spacing = 0,
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center
         };
-        titleStack.Children.Add(MonthSingleLineText(SchedulePeriodTitle(), 20, "#202124", FontWeight.SemiBold));
-        titleStack.Children.Add(MonthSingleLineText(SchedulePeriodSubtitle(), 11, "#5f6368", FontWeight.SemiBold));
+        titleStack.Children.Add(MonthSingleLineText(SchedulePeriodTitle(), 19, "#202124", FontWeight.SemiBold));
 
         var actions = BuildScheduleToolbarActions(singleLine);
         Control content;
@@ -2363,7 +2991,7 @@ public sealed class MainWindow : Window
             var grid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("Auto,14,*,14,Auto"),
-                MinHeight = 38
+                MinHeight = 34
             };
             Grid.SetColumn(nav, 0);
             Grid.SetColumn(titleStack, 2);
@@ -2394,7 +3022,8 @@ public sealed class MainWindow : Window
         return new Border
         {
             Background = Brush("#00ffffff"),
-            Padding = new Thickness(0, 0, 0, 2),
+            Padding = new Thickness(0),
+            Tag = "schedule-toolbar",
             Child = content
         };
     }
@@ -2419,12 +3048,11 @@ public sealed class MainWindow : Window
         {
             await CreateScheduleBlockInDayViewAsync(ResolveDefaultNewBlockStartMin());
         }));
-        AddAction(ToolbarButton("提醒", async (_, _) =>
+        if (_undoSchedules.Count > 0)
         {
-            var reminder = _reminderService.Generate(_daySchedule);
-            await (Clipboard?.SetTextAsync(reminder) ?? Task.CompletedTask);
-            SetStatus("提醒已复制到剪贴板");
-        }, secondary: true));
+            AddAction(ToolbarButton("撤销", (_, _) => UndoLastScheduleChange(), secondary: true));
+        }
+
         if (HasCurrentDayOverride())
         {
             AddAction(ToolbarButton("恢复当天", (_, _) => ClearCurrentDayOverride(), secondary: true), 0);
@@ -2847,15 +3475,10 @@ public sealed class MainWindow : Window
             .Where(block => _selectedRuntimeIds.Contains(block.RuntimeId) && IsVisibleBlock(block))
             .OrderBy(block => block.StartMin)
             .ToList();
-        var completion = GetCompletionStats(_daySchedule);
 
         var root = new StackPanel { Spacing = 10 };
         if (selected.Count == 0)
         {
-            root.Children.Add(Text("快捷操作", 18, "#111827", FontWeight.SemiBold));
-            root.Children.Add(Text($"当天完成 {completion.Done}/{completion.Total}，{completion.Percent}%", 12, "#2563eb", FontWeight.SemiBold));
-            root.Children.Add(Text(EmptySelectionHint(), 12, "#64748b"));
-
             var actions = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,*"),
@@ -2870,23 +3493,14 @@ public sealed class MainWindow : Window
                 RebuildSchedules();
                 RenderActivePage();
             }, secondary: true);
-            var reminder = Button("复制提醒", async (_, _) =>
-            {
-                var text = _reminderService.Generate(_daySchedule);
-                await (Clipboard?.SetTextAsync(text) ?? Task.CompletedTask);
-                SetStatus("提醒已复制到剪贴板");
-            }, secondary: true);
             var restore = Button("恢复当天", (_, _) => ClearCurrentDayOverride(), secondary: true);
             restore.IsEnabled = HasCurrentDayOverride();
             Grid.SetColumn(create, 0);
             Grid.SetColumn(openDay, 1);
-            Grid.SetRow(reminder, 1);
-            Grid.SetColumn(reminder, 0);
             Grid.SetRow(restore, 1);
-            Grid.SetColumn(restore, 1);
+            Grid.SetColumnSpan(restore, 2);
             actions.Children.Add(create);
             actions.Children.Add(openDay);
-            actions.Children.Add(reminder);
             actions.Children.Add(restore);
             root.Children.Add(actions);
 
@@ -2930,16 +3544,6 @@ public sealed class MainWindow : Window
         return Card("批量调整", root);
     }
 
-    private string EmptySelectionHint()
-    {
-        return _scheduleView switch
-        {
-            ScheduleViewMode.Month => $"选中日期 {_focusDate:MM-dd}",
-            ScheduleViewMode.Week => "未选中日程",
-            _ => "未选中日程"
-        };
-    }
-
     private Control RenderFocusDayAgendaCard()
     {
         var root = new StackPanel { Spacing = 8 };
@@ -2978,7 +3582,7 @@ public sealed class MainWindow : Window
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(7),
                 Padding = new Thickness(10),
-                Child = Text("当天没有日程。", 12, "#64748b")
+                Child = Text("无日程", 12, "#64748b", FontWeight.SemiBold)
             });
         }
         else
@@ -2989,7 +3593,7 @@ public sealed class MainWindow : Window
             }
             if (blocks.Count > 7)
             {
-                root.Children.Add(Text($"还有 {blocks.Count - 7} 个，点击“打开”查看全部。", 11, "#64748b", FontWeight.SemiBold));
+                root.Children.Add(Text($"还有 {blocks.Count - 7} 个", 11, "#64748b", FontWeight.SemiBold));
             }
         }
 
@@ -2998,6 +3602,7 @@ public sealed class MainWindow : Window
 
     private Control BuildFocusDayAgendaRow(ScheduleBlock block)
     {
+        var completable = IsCompletableBlock(block);
         var done = IsBlockCompleted(block);
         var selected = _selectedRuntimeIds.Contains(block.RuntimeId);
         var grid = new Grid
@@ -3005,29 +3610,57 @@ public sealed class MainWindow : Window
             ColumnDefinitions = new ColumnDefinitions("Auto,*"),
             ColumnSpacing = 8
         };
-        var check = new Button
+        Control leading;
+        if (completable)
         {
-            Content = CenteredIconText(done ? "✓" : "", 12, done ? "#ffffff" : "#64748b"),
-            Width = 22,
-            Height = 22,
-            MinHeight = 22,
-            Padding = new Thickness(0),
-            Background = Brush(done ? "#22c55e" : "#ffffff"),
-            Foreground = Brush(done ? "#ffffff" : "#64748b"),
-            BorderBrush = Brush(done ? "#16a34a" : "#cbd5e1"),
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(11),
-            HorizontalContentAlignment = HorizontalAlignment.Center,
-            VerticalContentAlignment = VerticalAlignment.Center
-        };
-        check.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            var check = new Button
+            {
+                Content = CenteredIconText(done ? "✓" : "", 12, done ? "#ffffff" : "#64748b"),
+                Width = 22,
+                Height = 22,
+                MinHeight = 22,
+                Padding = new Thickness(0),
+                Background = Brush(done ? "#22c55e" : "#ffffff"),
+                Foreground = Brush(done ? "#ffffff" : "#64748b"),
+                BorderBrush = Brush(done ? "#16a34a" : "#cbd5e1"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(11),
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            check.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            ToolTip.SetTip(check, done ? "取消完成" : "标记完成");
+            leading = check;
+        }
+        else
+        {
+            leading = new Border
+            {
+                Width = 22,
+                Height = 22,
+                CornerRadius = new CornerRadius(11),
+                Background = Brush("#e8f0fe"),
+                BorderBrush = Brush("#bfdbfe"),
+                BorderThickness = new Thickness(1),
+                Child = new Border
+                {
+                    Width = 8,
+                    Height = 8,
+                    CornerRadius = new CornerRadius(4),
+                    Background = Brush("#1a73e8"),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            ToolTip.SetTip(leading, "固定日程");
+        }
 
         var text = new StackPanel { Spacing = 1 };
         text.Children.Add(Text($"{block.Start}-{block.End}", 11, done ? "#94a3b8" : "#475569", FontWeight.SemiBold));
         text.Children.Add(Text(block.Title, 12, done ? "#64748b" : "#111827", FontWeight.SemiBold));
-        Grid.SetColumn(check, 0);
+        Grid.SetColumn(leading, 0);
         Grid.SetColumn(text, 1);
-        grid.Children.Add(check);
+        grid.Children.Add(leading);
         grid.Children.Add(text);
 
         var row = new Border
@@ -3054,8 +3687,6 @@ public sealed class MainWindow : Window
         };
 
         var menu = new ContextMenu();
-        var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
-        complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var edit = new MenuItem { Header = "编辑" };
         edit.Click += async (_, _) => await EditScheduleBlockAsync(block);
         var openDay = new MenuItem { Header = "打开日视图" };
@@ -3066,7 +3697,12 @@ public sealed class MainWindow : Window
             RebuildSchedules();
             RenderActivePage();
         };
-        menu.Items.Add(complete);
+        if (completable)
+        {
+            var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
+            complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            menu.Items.Add(complete);
+        }
         menu.Items.Add(edit);
         menu.Items.Add(openDay);
         AddDaySelectionContextMenuItems(menu, block);
@@ -3118,13 +3754,12 @@ public sealed class MainWindow : Window
         }
         else
         {
-            root.Children.Add(Text(IsFocusDateToday() ? "今天没有剩余日程" : "当天没有日程", 12, "#16a34a", FontWeight.SemiBold));
-            root.Children.Add(Text("可以直接新建，或让 AI 帮你安排。", 12, "#64748b"));
+            root.Children.Add(Text(IsFocusDateToday() ? "无剩余日程" : "无日程", 12, "#16a34a", FontWeight.SemiBold));
         }
 
         if (IsFocusDateToday())
         {
-            root.Children.Add(Text($"当前时间 {TimeText.ToTime(now)}", 11, "#94a3b8"));
+            root.Children.Add(Text($"现在 {TimeText.ToTime(now)}", 11, "#94a3b8"));
         }
         else
         {
@@ -3260,11 +3895,13 @@ public sealed class MainWindow : Window
 
     private Border BuildScheduleBlockControl(ScheduleBlock block, double pixelsPerMinute, double topOffset, TimelineEventLayout layout)
     {
+        var completable = IsCompletableBlock(block);
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(block);
         var eventWidth = DayEventWidthForLayout(layout);
         var ultraNarrow = eventWidth < 96;
         var compact = block.DurationMin * pixelsPerMinute < 44 || eventWidth < 132;
+        var showCompleteButton = completable && !ultraNarrow;
         var accent = done ? "#9aa0a6" : MonthEventAccent(block);
         var selected = _selectedRuntimeIds.Contains(block.RuntimeId);
         var border = new Border
@@ -3286,7 +3923,7 @@ public sealed class MainWindow : Window
         ToolTip.SetTip(border, ScheduleBlockTooltip(_focusDate, block, done, current));
         var eventContent = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions(ultraNarrow ? "Auto,*" : "Auto,Auto,*"),
+            ColumnDefinitions = new ColumnDefinitions(ultraNarrow || !showCompleteButton ? "Auto,*" : "Auto,Auto,*"),
             ColumnSpacing = ultraNarrow ? 5 : compact ? 6 : 9
         };
         var accentStrip = new Border
@@ -3325,9 +3962,9 @@ public sealed class MainWindow : Window
         titleLabel.TextTrimming = TextTrimming.CharacterEllipsis;
         textStack.Children.Add(titleLabel);
         Grid.SetColumn(accentStrip, 0);
-        Grid.SetColumn(textStack, ultraNarrow ? 1 : 2);
+        Grid.SetColumn(textStack, ultraNarrow || !showCompleteButton ? 1 : 2);
         eventContent.Children.Add(accentStrip);
-        if (!ultraNarrow)
+        if (showCompleteButton)
         {
             Grid.SetColumn(completeButton, 1);
             eventContent.Children.Add(completeButton);
@@ -3457,11 +4094,14 @@ public sealed class MainWindow : Window
         };
 
         var menu = new ContextMenu();
-        var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
-        complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var edit = new MenuItem { Header = "编辑" };
         edit.Click += async (_, _) => await EditScheduleBlockAsync(block);
-        menu.Items.Add(complete);
+        if (completable)
+        {
+            var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
+            complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            menu.Items.Add(complete);
+        }
         menu.Items.Add(edit);
         AddDaySelectionContextMenuItems(menu, block);
         border.ContextMenu = menu;
@@ -4159,6 +4799,7 @@ public sealed class MainWindow : Window
 
     private Control BuildMonthEventChip(DateOnly date, ScheduleBlock block, Grid monthGrid)
     {
+        var completable = IsCompletableBlock(block);
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(date, block);
         var accent = MonthEventAccent(block);
@@ -4269,15 +4910,18 @@ public sealed class MainWindow : Window
         };
 
         var menu = new ContextMenu();
-        var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
-        complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var edit = new MenuItem { Header = "编辑" };
         edit.Click += async (_, _) => await EditWeekScheduleBlockAsync(date, block);
         var openDay = new MenuItem { Header = "打开日视图" };
         openDay.Click += (_, _) => OpenDayFromMonth(date);
         var delete = new MenuItem { Header = "删除" };
         delete.Click += async (_, _) => await DeleteBlockOnDateAsync(date, block);
-        menu.Items.Add(complete);
+        if (completable)
+        {
+            var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
+            complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            menu.Items.Add(complete);
+        }
         menu.Items.Add(edit);
         menu.Items.Add(openDay);
         menu.Items.Add(delete);
@@ -4713,6 +5357,7 @@ public sealed class MainWindow : Window
 
     private Border BuildWeekScheduleBlockControl(WeekDaySchedule day, ScheduleBlock block, Canvas canvas, int dayIndex, TimelineEventLayout layout)
     {
+        var completable = IsCompletableBlock(block);
         var done = IsBlockCompleted(block);
         var current = IsCurrentBlock(day.Date, block);
         var accent = done ? "#9aa0a6" : MonthEventAccent(block);
@@ -4874,8 +5519,6 @@ public sealed class MainWindow : Window
         };
 
         var menu = new ContextMenu();
-        var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
-        complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
         var edit = new MenuItem { Header = "编辑" };
         edit.Click += async (_, _) => await EditWeekScheduleBlockAsync(day.Date, block);
         var openDay = new MenuItem { Header = "打开日视图" };
@@ -4889,7 +5532,12 @@ public sealed class MainWindow : Window
         };
         var delete = new MenuItem { Header = "删除" };
         delete.Click += async (_, _) => await DeleteBlockOnDateAsync(day.Date, block);
-        menu.Items.Add(complete);
+        if (completable)
+        {
+            var complete = new MenuItem { Header = done ? "取消完成" : "标记完成" };
+            complete.Click += async (_, _) => await ToggleBlockCompleteAsync(block);
+            menu.Items.Add(complete);
+        }
         menu.Items.Add(edit);
         menu.Items.Add(openDay);
         menu.Items.Add(delete);
@@ -6992,6 +7640,8 @@ public sealed class MainWindow : Window
 
     private static bool IsVisibleBlock(ScheduleBlock block) => block.Type != ScheduleBlockType.Buffer;
 
+    private static bool IsCompletableBlock(ScheduleBlock block) => ScheduleCompletion.IsCompletable(block);
+
     private bool IsFocusDateToday() => _focusDate == DateOnly.FromDateTime(DateTime.Today);
 
     private static int CurrentMinute() => DateTime.Now.Hour * 60 + DateTime.Now.Minute;
@@ -7010,11 +7660,23 @@ public sealed class MainWindow : Window
 
     private bool IsBlockCompleted(ScheduleBlock block)
     {
-        return _state.Completed.TryGetValue(block.RuntimeId, out var done) && done;
+        return IsCompletableBlock(block) && _state.Completed.TryGetValue(block.RuntimeId, out var done) && done;
     }
 
     private async Task ToggleBlockCompleteAsync(ScheduleBlock block)
     {
+        if (!IsCompletableBlock(block))
+        {
+            if (_state.Completed.Remove(block.RuntimeId))
+            {
+                await _store.SaveStateAsync(_state);
+            }
+
+            SetStatus("固定日程不计入完成度");
+            RenderActivePage();
+            return;
+        }
+
         if (IsBlockCompleted(block))
         {
             _state.Completed.Remove(block.RuntimeId);
@@ -7032,10 +7694,8 @@ public sealed class MainWindow : Window
 
     private CompletionStats GetCompletionStats(DaySchedule schedule)
     {
-        var blocks = schedule.Blocks.Where(IsVisibleBlock).ToList();
-        var total = blocks.Count;
-        var done = blocks.Count(IsBlockCompleted);
-        return new CompletionStats(total, done);
+        var stats = ScheduleCompletion.Calculate(schedule, _state.Completed);
+        return new CompletionStats(stats.Total, stats.Done);
     }
 
     private static string WeekdayText(DateOnly date) => "日一二三四五六"[(int)date.DayOfWeek].ToString();
@@ -7079,13 +7739,44 @@ public sealed class MainWindow : Window
     private void SetStatus(string message, bool error = false)
     {
         _statusText.Text = message;
-        _statusText.Foreground = Brush(error ? "#fca5a5" : "#9ca3af");
-        _topbarStatusText.Text = message;
-        _topbarStatusText.Foreground = Brush(error ? "#991b1b" : "#475569");
-        if (_topbarStatusPill is not null)
+        _statusText.Foreground = Brush(error ? "#fecaca" : "#dbeafe");
+        if (_statusToastHost is null) return;
+
+        var showToast = ShouldShowStatusToast(message, error);
+        _statusToastHost.IsVisible = showToast;
+        _statusToastHost.Background = Brush(error ? "#7f1d1d" : "#111827");
+        _statusToastHost.BorderBrush = Brush(error ? "#ef4444" : "#334155");
+        if (!showToast) return;
+
+        var version = ++_statusToastVersion;
+        _ = HideStatusToastLaterAsync(version, error ? 5200 : 3000);
+    }
+
+    private static bool ShouldShowStatusToast(string message, bool error)
+    {
+        if (error) return true;
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        if (message.Contains("失败", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("冲突", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("没有找到", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("无效", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("已复制", StringComparison.OrdinalIgnoreCase))
         {
-            _topbarStatusPill.Background = Brush(error ? "#fef2f2" : "#f8fafc");
-            _topbarStatusPill.BorderBrush = Brush(error ? "#fecaca" : "#e2e8f0");
+            return true;
         }
+
+        return false;
+    }
+
+    private async Task HideStatusToastLaterAsync(int version, int delayMs)
+    {
+        await Task.Delay(delayMs);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (version == _statusToastVersion && _statusToastHost is not null)
+            {
+                _statusToastHost.IsVisible = false;
+            }
+        });
     }
 }
