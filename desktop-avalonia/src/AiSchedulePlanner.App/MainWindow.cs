@@ -501,7 +501,24 @@ public sealed class MainWindow : Window
             case "chat-warnings":
                 ApplyChatWarningsReviewScenario();
                 break;
+            case "ai":
+            case "ai-settings":
+                ApplyPageReviewScenario("Ai");
+                break;
         }
+    }
+
+    private void ApplyPageReviewScenario(string page)
+    {
+        _activePage = page;
+        _state.Preferences.StartupPage = page;
+        _sidebarCollapsed = false;
+        _state.Preferences.SidebarCollapsed = false;
+        ApplySidebarLayout();
+        UpdateNavigationVisualState();
+        _selectedRuntimeIds.Clear();
+        RebuildSchedules();
+        RenderActivePage();
     }
 
     private void ApplyOverviewReviewScenario()
@@ -913,8 +930,27 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildAiSettingsAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildAiSettingsAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Ai") return [];
+
+        var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-main-column"));
+        var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "ai-settings-side-column"));
+
+        return
+        [
+            $"ai_settings_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
+            $"ai_settings_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
+            $"ai_settings_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}"
+        ];
     }
 
     private IReadOnlyList<string> BuildScheduleLayoutAuditRows(IReadOnlyList<Control> visibleControls, IReadOnlyList<string> visibleTexts, IReadOnlyList<string> buttonLabels)
@@ -6760,6 +6796,9 @@ public sealed class MainWindow : Window
 
     private Control RenderAiSettings()
     {
+        var contentWidth = ResolveMainContentViewportWidth();
+        var compact = contentWidth < 760;
+        var sideWidth = compact ? 280 : 330;
         var root = PageStack();
         root.Children.Add(Header("AI 设置", "配置对话模型、请求头和回复风格。密钥只保存在本机用户数据目录。"));
 
@@ -6981,18 +7020,19 @@ public sealed class MainWindow : Window
             RenderActivePage();
         }, secondary: true);
 
-        var left = new StackPanel { Spacing = 14 };
+        var left = new StackPanel { Spacing = 14, Tag = "ai-settings-main-column" };
         left.Children.Add(Card("连接", connection));
         left.Children.Add(Card("行为", behavior));
 
-        var right = new StackPanel { Spacing = 14 };
+        var right = new StackPanel { Spacing = 14, Tag = "ai-settings-side-column" };
         right.Children.Add(RenderAiSafetyPanel());
         right.Children.Add(RenderAiQuickExamples());
 
         var columns = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,330"),
-            ColumnSpacing = 16
+            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
+            ColumnSpacing = compact ? 12 : 16,
+            Tag = "ai-settings-work-area"
         };
         Grid.SetColumn(left, 0);
         Grid.SetColumn(right, 1);
