@@ -75,6 +75,7 @@ public sealed class MainWindow : Window
     private Grid? _shellRoot;
     private Border? _sidebarHost;
     private Border? _topbarHost;
+    private StackPanel? _topbarActions;
     private Border? _contentHost;
     private Border? _statusToastHost;
     private TextBlock? _brandTitle;
@@ -391,6 +392,7 @@ public sealed class MainWindow : Window
     {
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        _topbarActions = right;
         _undoButton = Button("撤销", (_, _) => UndoLastScheduleChange(), secondary: true);
         _undoButton.IsEnabled = false;
         right.Children.Add(_undoButton);
@@ -847,6 +849,7 @@ public sealed class MainWindow : Window
         report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
         report.AppendLine($"global_topbar_visible: {_topbarHost?.IsVisible == true}");
+        report.AppendLine($"global_undo_button_visible: {_undoButton?.IsVisible == true}");
         report.AppendLine($"visible_controls: {visibleControls.Count}");
         report.AppendLine($"zero_sized_visible_controls: {zeroSized}");
         if (zeroSized > 0)
@@ -1475,8 +1478,9 @@ public sealed class MainWindow : Window
     {
         if (_undoButton is not null)
         {
-            _undoButton.IsEnabled = _undoSchedules.Count > 0;
-            _undoButton.Content = _undoSchedules.Count == 0 ? "撤销" : $"撤销：{_undoDescription}";
+            var hasUndo = _undoSchedules.Count > 0;
+            _undoButton.IsEnabled = hasUndo;
+            _undoButton.Content = hasUndo ? $"撤销：{_undoDescription}" : "撤销";
         }
 
         UpdateNavigationVisualState();
@@ -1485,10 +1489,14 @@ public sealed class MainWindow : Window
         {
             _topbarHost.IsVisible = !schedulePage;
         }
+        if (_topbarActions is not null)
+        {
+            _topbarActions.IsVisible = !schedulePage && _undoSchedules.Count > 0;
+        }
         _topbarTitle.IsVisible = !schedulePage;
         if (_undoButton is not null)
         {
-            _undoButton.IsVisible = !schedulePage;
+            _undoButton.IsVisible = !schedulePage && _undoSchedules.Count > 0;
         }
 
         if (_contentHost is not null)
