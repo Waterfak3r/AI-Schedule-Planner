@@ -3526,7 +3526,7 @@ public sealed class MainWindow : Window
         var editableCount = selected.Count(block => block.Editable);
         var range = selected.Count == 0 ? "" : $"{TimeText.ToTime(selected.Min(block => block.StartMin))}-{TimeText.ToTime(selected.Max(block => block.EndMin))}";
         var viewportWidth = ResolveScheduleCalendarViewportWidth();
-        var compactActions = viewportWidth < 760;
+        var compactActions = viewportWidth < 900;
 
         var text = new StackPanel { Spacing = 2 };
         if (compactActions)
@@ -3564,8 +3564,8 @@ public sealed class MainWindow : Window
             delete.MinHeight = 30;
             delete.Padding = new Thickness(10, 5);
         }
-        AddSelectionAction(actions, clear, compactActions ? 6 : 8, compactActions ? 4 : 8);
-        AddSelectionAction(actions, delete, 0, compactActions ? 4 : 8);
+        AddSelectionAction(actions, clear, compactActions ? 6 : 8, 0);
+        AddSelectionAction(actions, delete, 0, 0);
         actions.HorizontalAlignment = HorizontalAlignment.Right;
 
         Control content;
@@ -3579,7 +3579,7 @@ public sealed class MainWindow : Window
         }
         else
         {
-            actions.MaxWidth = compactActions ? 360 : 450;
+            actions.MaxWidth = compactActions ? Math.Min(520, Math.Max(360, viewportWidth - 260)) : 450;
             var grid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
@@ -3615,8 +3615,8 @@ public sealed class MainWindow : Window
                 ? CompactSelectionActionButton($"↓{minutes}", (_, _) => MoveSelected(minutes), $"下移 {minutes} 分钟")
                 : ToolbarButton($"下移 {minutes}", (_, _) => MoveSelected(minutes), secondary: true);
             up.IsEnabled = down.IsEnabled = enabled;
-            AddSelectionAction(actions, up, compact ? 6 : 8, compact ? 4 : 8);
-            AddSelectionAction(actions, down, compact ? 6 : 8, compact ? 4 : 8);
+            AddSelectionAction(actions, up, compact ? 6 : 8, 0);
+            AddSelectionAction(actions, down, compact ? 6 : 8, 0);
         }
 
         return actions;
