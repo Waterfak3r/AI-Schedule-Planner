@@ -47,6 +47,7 @@ public sealed class MainWindow : Window
     private const double SelectionDragThreshold = 6;
     private const double SidebarExpandedWidth = 248;
     private const double SidebarCollapsedWidth = 76;
+    private const double ScheduleAutoCollapsePanelViewportWidth = 900;
 
     private readonly IPlannerStore _store;
     private readonly IScheduleEngine _scheduleEngine = new ScheduleEngine();
@@ -65,6 +66,7 @@ public sealed class MainWindow : Window
     private readonly List<ScheduleAction> _pendingActions = [];
     private readonly HashSet<string> _selectedRuntimeIds = [];
     private bool _chatBusy;
+    private bool _schedulePanelPinnedOpenForNarrow;
     private int _autosaveVersion;
     private int _statusToastVersion;
     private int _monthFocusVersion;
@@ -306,6 +308,10 @@ public sealed class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             if (version != _viewportRefreshVersion) return;
+            if (ResolveMainContentViewportWidth() >= ScheduleAutoCollapsePanelViewportWidth)
+            {
+                _schedulePanelPinnedOpenForNarrow = false;
+            }
             RenderActivePage();
         }, DispatcherPriority.Background);
     }
@@ -317,8 +323,26 @@ public sealed class MainWindow : Window
 
     private double ResolveSchedulePanelFootprintWidth()
     {
-        if (_state.Preferences.SchedulePanelCollapsed) return 0;
+        if (IsSchedulePanelEffectivelyCollapsed()) return 0;
         return ResolveMainContentViewportWidth() < 760 ? 232d : 256d;
+    }
+
+    private bool IsSchedulePanelEffectivelyCollapsed()
+    {
+        return _state.Preferences.SchedulePanelCollapsed || IsSchedulePanelAutoCollapsed();
+    }
+
+    private bool IsSchedulePanelAutoCollapsed()
+    {
+        return !_state.Preferences.SchedulePanelCollapsed &&
+            !_schedulePanelPinnedOpenForNarrow &&
+            IsSchedulePanelAutoCollapseEligible();
+    }
+
+    private bool IsSchedulePanelAutoCollapseEligible()
+    {
+        return _activePage == "Schedule" &&
+            ResolveMainContentViewportWidth() < ScheduleAutoCollapsePanelViewportWidth;
     }
 
     private double ResolveMainContentViewportWidth()
@@ -925,6 +949,8 @@ public sealed class MainWindow : Window
         report.AppendLine($"schedule_view: {_scheduleView}");
         report.AppendLine($"sidebar: {(_sidebarCollapsed ? "collapsed" : "expanded")}");
         report.AppendLine($"schedule_panel: {(_state.Preferences.SchedulePanelCollapsed ? "collapsed" : "expanded")}");
+        report.AppendLine($"schedule_panel_effective: {(IsSchedulePanelEffectivelyCollapsed() ? "collapsed" : "expanded")}");
+        report.AppendLine($"schedule_panel_auto_collapsed: {IsSchedulePanelAutoCollapsed()}");
         report.AppendLine($"schedule_calendar_viewport_width: {ResolveScheduleCalendarViewportWidth():0.##}");
         report.AppendLine($"global_topbar_visible: {_topbarHost?.IsVisible == true}");
         report.AppendLine($"global_topbar_height: {(_topbarHost?.Bounds.Height ?? 0):0.##}");
@@ -1157,6 +1183,11 @@ public sealed class MainWindow : Window
         var toolbar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-toolbar"));
         var calendar = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-calendar"));
         var leftPanel = visibleControls.FirstOrDefault(control => Equals(control.Tag, "schedule-left-panel"));
+        var periodTitle = visibleControls
+            .OfType<TextBlock>()
+            .FirstOrDefault(control => Equals(control.Tag, "schedule-period-title"));
+        var periodTitleNaturalWidth = MeasureNaturalTextWidth(periodTitle);
+        var periodTitleFits = periodTitle is null || periodTitleNaturalWidth <= periodTitle.Bounds.Width + 1;
         var topHeight = MeasureVerticalDistance(main, calendar);
         if (double.IsNaN(topHeight) && top is not null)
         {
@@ -1183,9 +1214,18 @@ public sealed class MainWindow : Window
         return
         [
             $"schedule_global_topbar_visible: {_topbarHost?.IsVisible == true}",
+            $"schedule_panel_preference_collapsed: {_state.Preferences.SchedulePanelCollapsed}",
+            $"schedule_panel_effective_collapsed: {IsSchedulePanelEffectivelyCollapsed()}",
+            $"schedule_panel_auto_collapsed: {IsSchedulePanelAutoCollapsed()}",
+            $"schedule_panel_pinned_open_for_narrow: {_schedulePanelPinnedOpenForNarrow}",
+            $"schedule_panel_auto_collapse_threshold: {ScheduleAutoCollapsePanelViewportWidth:0.##}",
             $"schedule_left_panel_width: {(leftPanel?.Bounds.Width ?? 0):0.##}",
             $"schedule_toolbar_present: {toolbar is not null}",
             $"schedule_toolbar_height: {(toolbar?.Bounds.Height ?? 0):0.##}",
+            $"schedule_toolbar_title_text: {periodTitle?.Text ?? ""}",
+            $"schedule_toolbar_title_width: {(periodTitle?.Bounds.Width ?? 0):0.##}",
+            $"schedule_toolbar_title_natural_width: {periodTitleNaturalWidth:0.##}",
+            $"schedule_toolbar_title_fits: {periodTitleFits}",
             $"schedule_top_stack_height: {(top?.Bounds.Height ?? 0):0.##}",
             $"schedule_top_non_calendar_height: {topHeight:0.##}",
             $"schedule_top_compact_limit: {compactLimit:0.##}",
@@ -1272,6 +1312,24 @@ public sealed class MainWindow : Window
         var fromPoint = from.TranslatePoint(new Point(0, 0), this);
         var toPoint = to.TranslatePoint(new Point(0, 0), this);
         return fromPoint is null || toPoint is null ? double.NaN : toPoint.Value.Y - fromPoint.Value.Y;
+    }
+
+    private static double MeasureNaturalTextWidth(TextBlock? text)
+    {
+        if (text is null || string.IsNullOrEmpty(text.Text)) return 0;
+
+        var probe = new TextBlock
+        {
+            Text = text.Text,
+            FontFamily = text.FontFamily,
+            FontSize = text.FontSize,
+            FontStyle = text.FontStyle,
+            FontWeight = text.FontWeight,
+            FontStretch = text.FontStretch,
+            TextWrapping = TextWrapping.NoWrap
+        };
+        probe.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        return probe.DesiredSize.Width;
     }
 
     private IReadOnlyList<string> BuildWeekHeaderAuditRows(IReadOnlyList<Control> visibleControls)
@@ -3013,7 +3071,7 @@ public sealed class MainWindow : Window
 
     private Control RenderSchedule()
     {
-        var panelCollapsed = _state.Preferences.SchedulePanelCollapsed;
+        var panelCollapsed = IsSchedulePanelEffectivelyCollapsed();
         var compact = ResolveMainContentViewportWidth() < 760;
         var panelWidth = compact ? 220 : 240;
         var panelSpacing = compact ? 12 : 16;
@@ -3106,16 +3164,28 @@ public sealed class MainWindow : Window
             .ToList();
         var editableCount = selected.Count(block => block.Editable);
         var range = selected.Count == 0 ? "" : $"{TimeText.ToTime(selected.Min(block => block.StartMin))}-{TimeText.ToTime(selected.Max(block => block.EndMin))}";
+        var viewportWidth = ResolveScheduleCalendarViewportWidth();
+        var compactActions = viewportWidth < 760;
 
         var text = new StackPanel { Spacing = 2 };
-        text.Children.Add(Text($"已选中 {selected.Count} 个日程", 13, "#1d4ed8", FontWeight.SemiBold));
-        text.Children.Add(Text(editableCount == 0
-            ? "选中的日程不可批量编辑。"
-            : $"范围 {range}",
-            12,
-            editableCount == 0 ? "#64748b" : "#334155"));
+        if (compactActions)
+        {
+            var summary = editableCount == 0
+                ? $"已选中 {selected.Count} 个 · 不可批量编辑"
+                : $"已选中 {selected.Count} 个 · {range}";
+            text.Children.Add(Text(summary, 13, editableCount == 0 ? "#64748b" : "#1d4ed8", FontWeight.SemiBold));
+        }
+        else
+        {
+            text.Children.Add(Text($"已选中 {selected.Count} 个日程", 13, "#1d4ed8", FontWeight.SemiBold));
+            text.Children.Add(Text(editableCount == 0
+                ? "选中的日程不可批量编辑。"
+                : $"范围 {range}",
+                12,
+                editableCount == 0 ? "#64748b" : "#334155"));
+        }
 
-        var actions = BuildSelectionActionButtons(editableCount > 0, compact: false);
+        var actions = BuildSelectionActionButtons(editableCount > 0, compactActions);
         var clear = ToolbarButton("取消选择", (_, _) =>
         {
             _selectedRuntimeIds.Clear();
@@ -3126,12 +3196,19 @@ public sealed class MainWindow : Window
         delete.Foreground = Brush("#ffffff");
         delete.BorderBrush = Brush("#dc2626");
         delete.IsEnabled = editableCount > 0;
-        AddSelectionAction(actions, clear);
-        AddSelectionAction(actions, delete, 0);
+        if (compactActions)
+        {
+            clear.MinHeight = 30;
+            clear.Padding = new Thickness(8, 5);
+            delete.MinHeight = 30;
+            delete.Padding = new Thickness(10, 5);
+        }
+        AddSelectionAction(actions, clear, compactActions ? 6 : 8, compactActions ? 4 : 8);
+        AddSelectionAction(actions, delete, 0, compactActions ? 4 : 8);
         actions.HorizontalAlignment = HorizontalAlignment.Right;
 
         Control content;
-        if (ResolveScheduleCalendarViewportWidth() < 680)
+        if (viewportWidth < 600)
         {
             var stack = new StackPanel { Spacing = 8 };
             actions.HorizontalAlignment = HorizontalAlignment.Left;
@@ -3141,7 +3218,7 @@ public sealed class MainWindow : Window
         }
         else
         {
-            actions.MaxWidth = 450;
+            actions.MaxWidth = compactActions ? 360 : 450;
             var grid = new Grid
             {
                 ColumnDefinitions = new ColumnDefinitions("*,Auto"),
@@ -3160,7 +3237,7 @@ public sealed class MainWindow : Window
             BorderBrush = Brush("#bfdbfe"),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(12, 9),
+            Padding = compactActions ? new Thickness(10, 6) : new Thickness(12, 9),
             Child = content
         };
     }
@@ -3171,22 +3248,44 @@ public sealed class MainWindow : Window
         foreach (var minutes in new[] { 5, 15, 30 })
         {
             var up = compact
-                ? Button($"↑{minutes}", (_, _) => MoveSelected(-minutes), secondary: true)
+                ? CompactSelectionActionButton($"↑{minutes}", (_, _) => MoveSelected(-minutes), $"上移 {minutes} 分钟")
                 : ToolbarButton($"上移 {minutes}", (_, _) => MoveSelected(-minutes), secondary: true);
             var down = compact
-                ? Button($"↓{minutes}", (_, _) => MoveSelected(minutes), secondary: true)
+                ? CompactSelectionActionButton($"↓{minutes}", (_, _) => MoveSelected(minutes), $"下移 {minutes} 分钟")
                 : ToolbarButton($"下移 {minutes}", (_, _) => MoveSelected(minutes), secondary: true);
             up.IsEnabled = down.IsEnabled = enabled;
-            AddSelectionAction(actions, up);
-            AddSelectionAction(actions, down);
+            AddSelectionAction(actions, up, compact ? 6 : 8, compact ? 4 : 8);
+            AddSelectionAction(actions, down, compact ? 6 : 8, compact ? 4 : 8);
         }
 
         return actions;
     }
 
-    private static void AddSelectionAction(WrapPanel actions, Control control, double right = 8)
+    private Button CompactSelectionActionButton(string text, EventHandler<RoutedEventArgs> onClick, string tip)
     {
-        control.Margin = new Thickness(0, 0, right, 8);
+        var button = new Button
+        {
+            Content = CenteredIconText(text, 12, "#334155"),
+            Width = 42,
+            Height = 30,
+            MinHeight = 30,
+            Padding = new Thickness(0),
+            Background = Brush("#ffffff"),
+            Foreground = Brush("#334155"),
+            BorderBrush = Brush("#cbd5e1"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(7),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        ToolTip.SetTip(button, tip);
+        button.Click += onClick;
+        return button;
+    }
+
+    private static void AddSelectionAction(WrapPanel actions, Control control, double right = 8, double bottom = 8)
+    {
+        control.Margin = new Thickness(0, 0, right, bottom);
         control.VerticalAlignment = VerticalAlignment.Center;
         actions.Children.Add(control);
     }
@@ -3260,8 +3359,9 @@ public sealed class MainWindow : Window
         }
 
         AddNav(ToolbarButton("今天", (_, _) => GoToToday(), secondary: true));
-        var calendarToggle = ToolbarButton(_state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历", (_, _) => ToggleSchedulePanel(), secondary: true);
+        var calendarToggle = ToolbarButton(IsSchedulePanelEffectivelyCollapsed() ? "展开日历" : "收起日历", (_, _) => ToggleSchedulePanel(), secondary: true);
         calendarToggle.Tag = "schedule-calendar-toggle";
+        ToolTip.SetTip(calendarToggle, IsSchedulePanelAutoCollapsed() ? "窗口较窄，日历已自动收起" : null);
         AddNav(calendarToggle);
         AddNav(BuildScheduleNavGroup(), 0);
 
@@ -3271,7 +3371,10 @@ public sealed class MainWindow : Window
             MinWidth = 120,
             VerticalAlignment = VerticalAlignment.Center
         };
-        titleStack.Children.Add(MonthSingleLineText(SchedulePeriodTitle(), 19, "#202124", FontWeight.SemiBold));
+        var titleText = MonthSingleLineText(SchedulePeriodTitle(), 19, "#202124", FontWeight.SemiBold);
+        titleText.Tag = "schedule-period-title";
+        ToolTip.SetTip(titleText, SchedulePeriodTooltip());
+        titleStack.Children.Add(titleText);
 
         var actions = BuildScheduleToolbarActions(singleLine);
         Control content;
@@ -3326,12 +3429,14 @@ public sealed class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center
         };
         nav.Children.Add(CompactToolbarButton("今天", (_, _) => GoToToday(), "今天"));
-        var calendarToggle = CompactToolbarButton("日历", (_, _) => ToggleSchedulePanel(), _state.Preferences.SchedulePanelCollapsed ? "展开日历" : "收起日历");
+        var calendarToggle = CompactToolbarButton("日历", (_, _) => ToggleSchedulePanel(), IsSchedulePanelEffectivelyCollapsed() ? "展开日历" : "收起日历");
         calendarToggle.Tag = "schedule-calendar-toggle";
         nav.Children.Add(calendarToggle);
         nav.Children.Add(BuildScheduleNavGroup(compact: true));
 
         var title = MonthSingleLineText(SchedulePeriodTitle(), 15, "#202124", FontWeight.SemiBold);
+        title.Tag = "schedule-period-title";
+        ToolTip.SetTip(title, SchedulePeriodTooltip());
         title.VerticalAlignment = VerticalAlignment.Center;
 
         var actions = new StackPanel
@@ -3576,8 +3681,18 @@ public sealed class MainWindow : Window
         return _scheduleView switch
         {
             ScheduleViewMode.Month => $"{_focusDate:yyyy 年 M 月}",
+            ScheduleViewMode.Week => WeekToolbarTitle(),
+            _ => DayToolbarTitle()
+        };
+    }
+
+    private string SchedulePeriodTooltip()
+    {
+        return _scheduleView switch
+        {
             ScheduleViewMode.Week => WeekTitle(),
-            _ => $"{_focusDate:yyyy 年 M 月 d 日}"
+            ScheduleViewMode.Day => $"{_focusDate:yyyy 年 M 月 d 日} 周{WeekdayText(_focusDate)}",
+            _ => SchedulePeriodTitle()
         };
     }
 
@@ -3598,6 +3713,28 @@ public sealed class MainWindow : Window
         return start.Year == end.Year && start.Month == end.Month
             ? $"{start:yyyy 年 M 月 d 日} - {end:d 日}"
             : $"{start:yyyy 年 M 月 d 日} - {end:yyyy 年 M 月 d 日}";
+    }
+
+    private string DayToolbarTitle()
+    {
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        return _focusDate.Year == today.Year
+            ? $"{_focusDate:M 月 d 日}"
+            : $"{_focusDate:yyyy 年 M 月 d 日}";
+    }
+
+    private string WeekToolbarTitle()
+    {
+        var start = TimeText.MondayOfWeek(_focusDate);
+        var end = start.AddDays(6);
+        if (start.Year == end.Year && start.Month == end.Month)
+        {
+            return $"{start:yyyy 年 M 月}";
+        }
+
+        return start.Year == end.Year
+            ? $"{start:yyyy 年 M 月} - {end:M 月}"
+            : $"{start:yyyy 年 M 月} - {end:yyyy 年 M 月}";
     }
 
     private void ShiftSchedulePeriod(int direction)
@@ -3623,8 +3760,33 @@ public sealed class MainWindow : Window
 
     private void ToggleSchedulePanel()
     {
-        _state.Preferences.SchedulePanelCollapsed = !_state.Preferences.SchedulePanelCollapsed;
-        QueueStateAutosave(_state.Preferences.SchedulePanelCollapsed ? "日程左栏已收起，并已保存偏好" : "日程左栏已展开，并已保存偏好");
+        var autoEligible = IsSchedulePanelAutoCollapseEligible();
+        var effectiveCollapsed = IsSchedulePanelEffectivelyCollapsed();
+        if (effectiveCollapsed)
+        {
+            if (_state.Preferences.SchedulePanelCollapsed)
+            {
+                _state.Preferences.SchedulePanelCollapsed = false;
+                _schedulePanelPinnedOpenForNarrow = autoEligible;
+                QueueStateAutosave("日程左栏已展开，并已保存偏好");
+            }
+            else
+            {
+                _schedulePanelPinnedOpenForNarrow = true;
+                SetStatus("日程左栏已临时展开");
+            }
+        }
+        else if (_schedulePanelPinnedOpenForNarrow && autoEligible)
+        {
+            _schedulePanelPinnedOpenForNarrow = false;
+            SetStatus("窗口较窄，日程左栏已自动收起");
+        }
+        else
+        {
+            _state.Preferences.SchedulePanelCollapsed = true;
+            _schedulePanelPinnedOpenForNarrow = false;
+            QueueStateAutosave("日程左栏已收起，并已保存偏好");
+        }
         RenderActivePage();
     }
 
