@@ -51,6 +51,7 @@ public sealed class MainWindow : Window
     private const double ScheduleAutoCollapseSidebarWindowWidth = 1080;
     private static readonly string[] MiniMonthWeekdayLabels = ["一", "二", "三", "四", "五", "六", "日"];
     private static readonly string[] MonthWeekdayHeaderLabels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+    private static readonly int[] WeekdayPickerDisplayOrder = [1, 2, 3, 4, 5, 6, 0];
 
     private readonly IPlannerStore _store;
     private readonly IScheduleEngine _scheduleEngine = new ScheduleEngine();
@@ -1226,6 +1227,15 @@ public sealed class MainWindow : Window
             .OfType<CheckBox>()
             .Where(control => (control.Name ?? "").StartsWith("weekday-picker-", StringComparison.Ordinal))
             .ToList();
+        var weekdayLabels = weekdayBoxes.Select(box => ControlText(box.Content)).ToList();
+        var weekdayTags = weekdayBoxes.Select(box => box.Tag is int day ? day.ToString() : "").ToList();
+        var weekdayLabelsMondayFirst = weekdayLabels.Count >= 7 &&
+            weekdayLabels.Count % 7 == 0 &&
+            weekdayLabels.Chunk(7).All(labels => labels.SequenceEqual(MonthWeekdayHeaderLabels));
+        var weekdayTagsPreserveValues = weekdayTags.Count >= 7 &&
+            weekdayTags.Count % 7 == 0 &&
+            weekdayTags.Chunk(7).All(tags => tags.SequenceEqual(WeekdayPickerDisplayOrder.Select(day => day.ToString())));
+        var weekdaySummarySample = WeekdaysText([0, 1, 2, 6]);
         var weekdayLabelCount = weekdayBoxes.Count(box => ControlText(box.Content).StartsWith("周", StringComparison.Ordinal));
         var fixedPoint = fixedPanel?.TranslatePoint(new Point(0, 0), this);
         var taskPoint = taskPanel?.TranslatePoint(new Point(0, 0), this);
@@ -1241,7 +1251,14 @@ public sealed class MainWindow : Window
             $"rules_task_panel_min_width_pass: {(taskPanel?.Bounds.Width ?? 0) >= 420}",
             $"rules_weekday_checkbox_count: {weekdayBoxes.Count}",
             $"rules_weekday_label_count: {weekdayLabelCount}",
-            $"rules_weekday_labels_pass: {weekdayBoxes.Count >= 7 && weekdayLabelCount == weekdayBoxes.Count}"
+            $"rules_weekday_labels: {string.Join(" | ", weekdayLabels)}",
+            $"rules_weekday_tags: {string.Join(" | ", weekdayTags)}",
+            $"rules_weekday_labels_pass: {weekdayBoxes.Count >= 7 && weekdayLabelCount == weekdayBoxes.Count}",
+            $"rules_weekday_labels_monday_first: {weekdayLabelsMondayFirst}",
+            $"rules_weekday_tags_preserve_values: {weekdayTagsPreserveValues}",
+            $"rules_weekday_picker_order_pass: {weekdayLabelsMondayFirst && weekdayTagsPreserveValues}",
+            $"rules_weekday_summary_sample: {weekdaySummarySample}",
+            $"rules_weekday_summary_monday_first: {weekdaySummarySample == "周一、周二、周六、周日"}"
         ];
     }
 
@@ -7528,11 +7545,11 @@ public sealed class MainWindow : Window
         var selected = selectedDays.ToHashSet();
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         var boxes = new List<CheckBox>();
-        for (var day = 0; day < 7; day++)
+        foreach (var day in WeekdayPickerDisplayOrder)
         {
             var box = new CheckBox
             {
-                Content = $"周{"日一二三四五六"[day]}",
+                Content = WeekdayRuleLabel(day),
                 IsChecked = selected.Contains(day),
                 Name = $"weekday-picker-{day}",
                 Tag = day,
@@ -7546,7 +7563,7 @@ public sealed class MainWindow : Window
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(7)
             };
-            ToolTip.SetTip(box, $"适用于周{"日一二三四五六"[day]}");
+            ToolTip.SetTip(box, $"适用于{WeekdayRuleLabel(day)}");
             boxes.Add(box);
             row.Children.Add(box);
         }
@@ -7599,7 +7616,17 @@ public sealed class MainWindow : Window
     {
         if (days.Count == 0) return "未指定";
         if (days.Count == 7) return "每天";
-        return string.Join("、", days.OrderBy(day => day).Select(day => $"周{"日一二三四五六"[Math.Clamp(day, 0, 6)]}"));
+        return string.Join("、", days.OrderBy(WeekdayDisplayIndex).Select(WeekdayRuleLabel));
+    }
+
+    private static int WeekdayDisplayIndex(int day)
+    {
+        return day == 0 ? 6 : Math.Clamp(day, 1, 6) - 1;
+    }
+
+    private static string WeekdayRuleLabel(int day)
+    {
+        return $"周{"日一二三四五六"[Math.Clamp(day, 0, 6)]}";
     }
 
     private static string CategoryLabel(string category)
