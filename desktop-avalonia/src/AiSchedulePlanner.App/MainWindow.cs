@@ -508,6 +508,9 @@ public sealed class MainWindow : Window
             case "rules":
                 ApplyPageReviewScenario("Rules");
                 break;
+            case "advanced":
+                ApplyPageReviewScenario("Advanced");
+                break;
         }
     }
 
@@ -941,8 +944,29 @@ public sealed class MainWindow : Window
         {
             report.AppendLine(row);
         }
+        foreach (var row in BuildAdvancedAuditRows(visibleControls))
+        {
+            report.AppendLine(row);
+        }
 
         return report.ToString();
+    }
+
+    private IReadOnlyList<string> BuildAdvancedAuditRows(IReadOnlyList<Control> visibleControls)
+    {
+        if (_activePage != "Advanced") return [];
+
+        var mainColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-main-column"));
+        var sideColumn = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-side-column"));
+        var localActions = visibleControls.FirstOrDefault(control => Equals(control.Tag, "advanced-local-actions"));
+
+        return
+        [
+            $"advanced_main_column_width: {(mainColumn?.Bounds.Width ?? 0):0.##}",
+            $"advanced_side_column_width: {(sideColumn?.Bounds.Width ?? 0):0.##}",
+            $"advanced_main_column_min_width_pass: {(mainColumn?.Bounds.Width ?? 0) >= 340}",
+            $"advanced_local_actions_wrap_panel: {localActions is WrapPanel}"
+        ];
     }
 
     private IReadOnlyList<string> BuildRulesAuditRows(IReadOnlyList<Control> visibleControls)
@@ -7337,18 +7361,22 @@ public sealed class MainWindow : Window
 
     private Control RenderAdvanced()
     {
+        var contentWidth = ResolveMainContentViewportWidth();
+        var compact = contentWidth < 760;
+        var sideWidth = compact ? 280 : 330;
         var root = PageStack();
         root.Children.Add(Header("高级", "管理日程生成偏好和本地数据。"));
 
         var columns = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,330"),
-            ColumnSpacing = 16
+            ColumnDefinitions = new ColumnDefinitions($"*,{sideWidth}"),
+            ColumnSpacing = compact ? 12 : 16,
+            Tag = "advanced-work-area"
         };
-        var left = new StackPanel { Spacing = 14 };
+        var left = new StackPanel { Spacing = 14, Tag = "advanced-main-column" };
         left.Children.Add(RenderPreferenceSettings());
         left.Children.Add(RenderLocalDataMaintenance());
-        var right = new StackPanel { Spacing = 14 };
+        var right = new StackPanel { Spacing = 14, Tag = "advanced-side-column" };
         right.Children.Add(RenderDataDirectoryPanel());
         right.Children.Add(RenderAdvancedSnapshot());
         Grid.SetColumn(left, 0);
@@ -7455,15 +7483,15 @@ public sealed class MainWindow : Window
         var root = new StackPanel { Spacing = 10 };
         root.Children.Add(Text("这些操作会直接修改本地状态。清除手动调整后，日程会回到自动生成结果。", 12, "#64748b"));
 
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        row.Children.Add(Button("清除完成状态", async (_, _) =>
+        var row = new WrapPanel { Orientation = Orientation.Horizontal, Tag = "advanced-local-actions" };
+        var clearCompleted = Button("清除完成状态", async (_, _) =>
         {
             _state.Completed.Clear();
             await _store.SaveStateAsync(_state);
             SetStatus("已清除完成状态");
             RenderActivePage();
-        }, secondary: true));
-        row.Children.Add(Button("清除所有手动调整", async (_, _) =>
+        }, secondary: true);
+        var clearOverrides = Button("清除所有手动调整", async (_, _) =>
         {
             if (!await ConfirmDangerAsync(
                     "清除所有手动调整？",
@@ -7478,8 +7506,8 @@ public sealed class MainWindow : Window
             await _store.SaveStateAsync(_state);
             SetStatus("已清除所有手动调整");
             RenderActivePage();
-        }, danger: true));
-        row.Children.Add(Button("重建示例数据", async (_, _) =>
+        }, danger: true);
+        var resetDefaults = Button("重建示例数据", async (_, _) =>
         {
             if (!await ConfirmDangerAsync(
                     "重建示例数据？",
@@ -7494,7 +7522,10 @@ public sealed class MainWindow : Window
             await _store.SaveStateAsync(_state);
             SetStatus("已重建示例数据并保存");
             RenderActivePage();
-        }, danger: true));
+        }, danger: true);
+        AddSelectionAction(row, clearCompleted);
+        AddSelectionAction(row, clearOverrides);
+        AddSelectionAction(row, resetDefaults, 0);
         root.Children.Add(row);
         return Card("本地状态", root);
     }
